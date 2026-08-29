@@ -1,0 +1,25 @@
+schema_version = "1.0.0"
+
+id = "blender_update_checker"
+version = "0.1.0"
+name = "Blender Update Checker"
+tagline = "Check for new Blender releases"
+maintainer = "Osmosae"
+type = "add-on"
+website = "https://github.com/Osmosae/blender-check-for-updates"
+
+blender_version_min = "4.2.1"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+network = "Check official Blender servers for new releases"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  ".git/",
+  ".gitignore",
+  ".pytest_cache/",
+  "tests/",
+  "*.zip",
+]
