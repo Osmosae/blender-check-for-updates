@@ -521,6 +521,7 @@ def _draw_statusbar_update(self, context: bpy.types.Context) -> None:
         "wm.url_open",
         text=f"Update to {_notification_version_text(preferences)}",
         icon="IMPORT",
+        depress=True,
     )
     operator.url = preferences.download_url
     operator = row.operator(
@@ -562,3 +563,4 @@ def unregister() -> None:
     bpy.types.TOPBAR_MT_help.remove(_draw_help_menu)
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
+ 
