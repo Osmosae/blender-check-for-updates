@@ -20,7 +20,7 @@ from typing import Any
 BUILDS_API_URL = "https://builder.blender.org/download/daily/?format=json&v=2"
 STABLE_DOWNLOAD_URL = "https://www.blender.org/download/"
 DAILY_DOWNLOAD_URL = "https://builder.blender.org/download/daily/"
-USER_AGENT = "Blender-Update-Checker/0.1"
+USER_AGENT = "Blender-Update-Checker/0.2"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 8.0
 

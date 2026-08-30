@@ -51,6 +51,21 @@ def _tag_redraw() -> None:
             area.tag_redraw()
 
 
+def _notification_visible(preferences) -> bool:
+    return (
+        preferences.last_status == "AVAILABLE"
+        and bool(preferences.latest_version)
+        and bool(preferences.download_url)
+        and preferences.dismissed_version != preferences.latest_version
+    )
+
+
+def _notification_version_text(preferences) -> str:
+    """Keep daily-build hashes out of the compact status-bar label."""
+
+    return preferences.latest_version.split(" (", 1)[0]
+
+
 def _worker_command(preferences) -> list[str]:
     worker_path = Path(__file__).with_name("worker.py")
     python_args = tuple(getattr(bpy.app, "python_args", ("-I",)))
@@ -336,6 +351,29 @@ class WM_OT_check_for_blender_updates(bpy.types.Operator):
         _tag_redraw()
 
 
+class WM_OT_set_blender_update_notification_visibility(bpy.types.Operator):
+    """Show or dismiss the available-update notification"""
+
+    bl_idname = "wm.set_blender_update_notification_visibility"
+    bl_label = "Update Notification"
+    bl_options = {"INTERNAL"}
+
+    show: BoolProperty(default=False, options={"HIDDEN"})
+
+    def execute(self, context: bpy.types.Context):
+        preferences = _preferences(context)
+        if preferences is None or preferences.last_status != "AVAILABLE":
+            return {"CANCELLED"}
+
+        preferences.dismissed_version = "" if self.show else preferences.latest_version
+        _tag_redraw()
+        if self.show:
+            self.report({"INFO"}, "Update notification restored")
+        else:
+            self.report({"INFO"}, "Update notification dismissed for this version")
+        return {"FINISHED"}
+
+
 class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
@@ -395,6 +433,7 @@ class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
     last_message: StringProperty(default="", options={"HIDDEN"})
     latest_version: StringProperty(default="", options={"HIDDEN"})
     download_url: StringProperty(default="", options={"HIDDEN"})
+    dismissed_version: StringProperty(default="", options={"HIDDEN"})
 
     def draw(self, _context: bpy.types.Context) -> None:
         layout = self.layout
@@ -421,6 +460,21 @@ class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
                     icon="URL",
                 )
                 operator.url = self.download_url
+            if self.dismissed_version == self.latest_version:
+                status_box.label(text="Status-bar notification dismissed for this version")
+                operator = status_box.operator(
+                    WM_OT_set_blender_update_notification_visibility.bl_idname,
+                    text="Show Status-Bar Notification",
+                    icon="HIDE_OFF",
+                )
+                operator.show = True
+            else:
+                operator = status_box.operator(
+                    WM_OT_set_blender_update_notification_visibility.bl_idname,
+                    text="Dismiss Notification",
+                    icon="X",
+                )
+                operator.show = False
         elif self.last_status == "UP_TO_DATE":
             status_box.label(text=self.last_message, icon="CHECKMARK")
         elif self.last_status == "ERROR":
@@ -457,20 +511,35 @@ def _draw_help_menu(self, context: bpy.types.Context) -> None:
     )
 
 
-def _draw_topbar_update(self, context: bpy.types.Context) -> None:
+def _draw_statusbar_update(self, context: bpy.types.Context) -> None:
     preferences = _preferences(context)
-    if preferences is None or preferences.last_status != "AVAILABLE":
+    if preferences is None or not _notification_visible(preferences):
         return
-    operator = self.layout.operator(
+
+    row = self.layout.row(align=True)
+    operator = row.operator(
         "wm.url_open",
-        text=f"Blender {preferences.latest_version} Available",
-        icon="INFO",
+        text=f"Update to {_notification_version_text(preferences)}",
+        icon="IMPORT",
     )
     operator.url = preferences.download_url
+    operator = row.operator(
+        "preferences.addon_show",
+        text="",
+        icon="PREFERENCES",
+    )
+    operator.module = __package__
+    operator = row.operator(
+        WM_OT_set_blender_update_notification_visibility.bl_idname,
+        text="",
+        icon="X",
+    )
+    operator.show = False
 
 
 _CLASSES = (
     WM_OT_check_for_blender_updates,
+    WM_OT_set_blender_update_notification_visibility,
     BlenderUpdateCheckerPreferences,
 )
 
@@ -479,7 +548,7 @@ def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_help.append(_draw_help_menu)
-    bpy.types.TOPBAR_MT_editor_menus.append(_draw_topbar_update)
+    bpy.types.STATUSBAR_HT_header.append(_draw_statusbar_update)
     _schedule_automatic_check()
 
 
@@ -489,7 +558,7 @@ def unregister() -> None:
     if bpy.app.timers.is_registered(_manual_background_timer):
         bpy.app.timers.unregister(_manual_background_timer)
     _terminate_worker()
-    bpy.types.TOPBAR_MT_editor_menus.remove(_draw_topbar_update)
+    bpy.types.STATUSBAR_HT_header.remove(_draw_statusbar_update)
     bpy.types.TOPBAR_MT_help.remove(_draw_help_menu)
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)

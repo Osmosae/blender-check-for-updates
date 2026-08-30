@@ -24,8 +24,10 @@ spec.loader.exec_module(module)
 module.register()
 
 assert hasattr(bpy.types, "WM_OT_check_for_blender_updates")
+assert hasattr(bpy.types, "WM_OT_set_blender_update_notification_visibility")
 assert bpy.app.timers.is_registered(module._automatic_check_timer) is False
 
 module.unregister()
 assert not hasattr(bpy.types, "WM_OT_check_for_blender_updates")
+assert not hasattr(bpy.types, "WM_OT_set_blender_update_notification_visibility")
 print("BLENDER_REGISTRATION_SMOKE_OK")
