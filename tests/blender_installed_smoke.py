@@ -14,9 +14,14 @@ addon = bpy.context.preferences.addons.get(package_name)
 
 assert addon is not None
 assert addon.preferences.auto_check is False
+assert addon.preferences.check_on_launch is False
 assert addon.preferences.update_channel == "STABLE"
 assert hasattr(bpy.types, "WM_OT_check_for_blender_updates")
 assert hasattr(bpy.types, "WM_OT_set_blender_update_notification_visibility")
+assert not bpy.app.timers.is_registered(module._automatic_check_timer)
+addon.preferences.auto_check = True
+assert bpy.app.timers.is_registered(module._automatic_check_timer)
+addon.preferences.auto_check = False
 assert not bpy.app.timers.is_registered(module._automatic_check_timer)
 
 addon.preferences.last_status = "AVAILABLE"
