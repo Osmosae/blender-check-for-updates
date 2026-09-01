@@ -11,7 +11,7 @@ A modern Blender extension that checks Blender's official build service for new 
 - Stable, current-release-series, and daily-build channels.
 - Available updates appear in Blender's status bar with shortcuts to the
   official download page and extension preferences.
-- Status-bar notifications can be dismissed for the reported version or build.
+- Status-bar notifications can be dismissed or restored for the reported version or build.
 - Automatic failures are silent. Status and errors remain available in the
   extension preferences.
 - The extension opens an official Blender download page; it never installs or

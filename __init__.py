@@ -263,6 +263,15 @@ def _update_channel_changed(self, _context) -> None:
     _tag_redraw()
 
 
+def _show_statusbar_notification_get(self) -> bool:
+    return not self.latest_version or self.dismissed_version != self.latest_version
+
+
+def _show_statusbar_notification_set(self, value: bool) -> None:
+    self.dismissed_version = "" if value else self.latest_version
+    _tag_redraw()
+
+
 class WM_OT_check_for_blender_updates(bpy.types.Operator):
     """Check Blender's official servers in a separate process"""
 
@@ -434,6 +443,12 @@ class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
     latest_version: StringProperty(default="", options={"HIDDEN"})
     download_url: StringProperty(default="", options={"HIDDEN"})
     dismissed_version: StringProperty(default="", options={"HIDDEN"})
+    show_statusbar_notification: BoolProperty(
+        name="Show Status-Bar Notification",
+        description="Show the available update in the status bar for this version",
+        get=_show_statusbar_notification_get,
+        set=_show_statusbar_notification_set,
+    )
 
     def draw(self, _context: bpy.types.Context) -> None:
         layout = self.layout
@@ -460,21 +475,7 @@ class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
                     icon="URL",
                 )
                 operator.url = self.download_url
-            if self.dismissed_version == self.latest_version:
-                status_box.label(text="Status-bar notification dismissed for this version")
-                operator = status_box.operator(
-                    WM_OT_set_blender_update_notification_visibility.bl_idname,
-                    text="Show Status-Bar Notification",
-                    icon="HIDE_OFF",
-                )
-                operator.show = True
-            else:
-                operator = status_box.operator(
-                    WM_OT_set_blender_update_notification_visibility.bl_idname,
-                    text="Dismiss Notification",
-                    icon="X",
-                )
-                operator.show = False
+            status_box.prop(self, "show_statusbar_notification")
         elif self.last_status == "UP_TO_DATE":
             status_box.label(text=self.last_message, icon="CHECKMARK")
         elif self.last_status == "ERROR":
@@ -563,4 +564,3 @@ def unregister() -> None:
     bpy.types.TOPBAR_MT_help.remove(_draw_help_menu)
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)
- 

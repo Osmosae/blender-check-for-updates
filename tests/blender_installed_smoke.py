@@ -27,7 +27,10 @@ assert module._notification_visible(addon.preferences)
 assert module._notification_version_text(addon.preferences) == "5.3.0 alpha"
 addon.preferences.dismissed_version = addon.preferences.latest_version
 assert not module._notification_visible(addon.preferences)
-addon.preferences.dismissed_version = ""
+assert addon.preferences.show_statusbar_notification is False
+addon.preferences.show_statusbar_notification = True
+assert addon.preferences.dismissed_version == ""
+assert module._notification_visible(addon.preferences)
 
 command = module._worker_command(addon.preferences)
 assert Path(command[-9]).name == "worker.py"
