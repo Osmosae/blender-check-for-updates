@@ -17,10 +17,14 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 
 _PROCESS: subprocess.Popen[str] | None = None
 _PROCESS_SOURCE = ""
+_PROCESS_CHANNEL = ""
 _POLL_SECONDS = 0.35
 _AUTO_START_DELAY_MIN = 45.0
 _AUTO_START_DELAY_MAX = 90.0
 _AUTO_OFFLINE_RETRY_SECONDS = 5 * 60.0
+_AUTO_ERROR_RETRY_INITIAL_SECONDS = 15 * 60.0
+_AUTO_ERROR_RETRY_MAX_SECONDS = 60 * 60.0
+_AUTO_FAILURE_COUNT = 0
 _AUTO_LAUNCH_CHECK_PENDING = False
 _INTERVAL_SECONDS = {
     "DAILY": 24 * 60 * 60,
@@ -89,7 +93,7 @@ def _worker_command(preferences) -> list[str]:
 
 
 def _start_worker(preferences, *, source: str) -> bool:
-    global _PROCESS, _PROCESS_SOURCE
+    global _PROCESS, _PROCESS_CHANNEL, _PROCESS_SOURCE
 
     if _PROCESS is not None:
         return False
@@ -100,6 +104,7 @@ def _start_worker(preferences, *, source: str) -> bool:
     if sys.platform == "win32":
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+    requested_channel = preferences.update_channel
     try:
         _PROCESS = subprocess.Popen(
             _worker_command(preferences),
@@ -118,30 +123,34 @@ def _start_worker(preferences, *, source: str) -> bool:
         preferences.last_channel = preferences.update_channel
         _PROCESS = None
         _PROCESS_SOURCE = ""
+        _PROCESS_CHANNEL = ""
         _tag_redraw()
         return False
 
     _PROCESS_SOURCE = source
+    _PROCESS_CHANNEL = requested_channel
     preferences.last_status = "CHECKING"
     preferences.last_message = "Checking Blender's official build service…"
     _tag_redraw()
     return True
 
 
-def _poll_worker() -> tuple[bool, dict[str, Any] | None]:
-    """Poll and return ``(completed, result)``."""
+def _poll_worker() -> tuple[bool, dict[str, Any] | None, str]:
+    """Poll and return ``(completed, result, requested_channel)``."""
 
-    global _PROCESS, _PROCESS_SOURCE
+    global _PROCESS, _PROCESS_CHANNEL, _PROCESS_SOURCE
 
     process = _PROCESS
     if process is None:
-        return True, None
+        return True, None, ""
     if process.poll() is None:
-        return False, None
+        return False, None, _PROCESS_CHANNEL
 
+    requested_channel = _PROCESS_CHANNEL
     stdout, stderr = process.communicate()
     _PROCESS = None
     _PROCESS_SOURCE = ""
+    _PROCESS_CHANNEL = ""
 
     try:
         result = json.loads(stdout)
@@ -150,14 +159,19 @@ def _poll_worker() -> tuple[bool, dict[str, Any] | None]:
     except (json.JSONDecodeError, ValueError) as exc:
         detail = stderr.strip() or str(exc)
         result = {"ok": False, "error": f"The update checker failed: {detail}"}
-    return True, result
+    return True, result, requested_channel
+
+
+def _result_matches_channel(preferences, requested_channel: str) -> bool:
+    return not requested_channel or requested_channel == preferences.update_channel
 
 
 def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]:
-    global _AUTO_LAUNCH_CHECK_PENDING
+    global _AUTO_FAILURE_COUNT, _AUTO_LAUNCH_CHECK_PENDING
 
     _AUTO_LAUNCH_CHECK_PENDING = False
-    preferences.last_checked_at = time.time()
+    checked_at = time.time()
+    preferences.last_checked_at = checked_at
     preferences.last_channel = preferences.update_channel
     if not result or not result.get("ok"):
         message = str((result or {}).get("error", "The update checker stopped"))
@@ -166,6 +180,8 @@ def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]
         _tag_redraw()
         return "WARNING", preferences.last_message
 
+    _AUTO_FAILURE_COUNT = 0
+    preferences.last_successful_check_at = checked_at
     preferences.latest_version = str(result.get("display_version", ""))
     preferences.download_url = str(result.get("download_url", ""))
     if result.get("update_available"):
@@ -184,11 +200,12 @@ def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]
 
 
 def _terminate_worker() -> None:
-    global _PROCESS, _PROCESS_SOURCE
+    global _PROCESS, _PROCESS_CHANNEL, _PROCESS_SOURCE
 
     process = _PROCESS
     _PROCESS = None
     _PROCESS_SOURCE = ""
+    _PROCESS_CHANNEL = ""
     if process is None or process.poll() is not None:
         return
     process.terminate()
@@ -207,23 +224,53 @@ def _seconds_until_auto_check(preferences) -> float:
         preferences.check_interval,
         _INTERVAL_SECONDS["WEEKLY"],
     )
-    elapsed = max(0.0, time.time() - preferences.last_checked_at)
+    last_successful_check_at = preferences.last_successful_check_at
+    if (
+        last_successful_check_at <= 0.0
+        and preferences.last_status in {"UP_TO_DATE", "AVAILABLE"}
+    ):
+        # Preserve schedules created before last_successful_check_at was introduced.
+        last_successful_check_at = preferences.last_checked_at
+    elapsed = max(0.0, time.time() - last_successful_check_at)
     return max(0.0, interval - elapsed)
 
 
+def _automatic_error_retry_seconds(failure_count: int | None = None) -> float:
+    failures = _AUTO_FAILURE_COUNT if failure_count is None else failure_count
+    exponent = max(0, min(failures - 1, 16))
+    return min(
+        _AUTO_ERROR_RETRY_INITIAL_SECONDS * (2**exponent),
+        _AUTO_ERROR_RETRY_MAX_SECONDS,
+    )
+
+
 def _automatic_check_timer() -> float | None:
-    global _AUTO_LAUNCH_CHECK_PENDING
+    global _AUTO_FAILURE_COUNT, _AUTO_LAUNCH_CHECK_PENDING
 
     preferences = _preferences()
     if preferences is None:
         return None
 
     if _PROCESS is not None and _PROCESS_SOURCE == "auto":
-        completed, result = _poll_worker()
+        completed, result, requested_channel = _poll_worker()
         if not completed:
             return _POLL_SECONDS
+        if not _result_matches_channel(preferences, requested_channel):
+            if not preferences.auto_check:
+                return None
+            if preferences.check_interval == "LAUNCH":
+                _AUTO_LAUNCH_CHECK_PENDING = True
+            return _POLL_SECONDS
         _apply_result(preferences, result)
-        if not preferences.auto_check or preferences.check_interval == "LAUNCH":
+        if not result or not result.get("ok"):
+            _AUTO_FAILURE_COUNT += 1
+            if preferences.auto_check and preferences.check_interval == "LAUNCH":
+                _AUTO_LAUNCH_CHECK_PENDING = True
+        if not preferences.auto_check:
+            return None
+        if not result or not result.get("ok"):
+            return _automatic_error_retry_seconds()
+        if preferences.check_interval == "LAUNCH":
             return None
         return max(1.0, _seconds_until_auto_check(preferences))
 
@@ -248,18 +295,23 @@ def _automatic_check_timer() -> float | None:
     _AUTO_LAUNCH_CHECK_PENDING = False
     if _start_worker(preferences, source="auto"):
         return _POLL_SECONDS
+    _AUTO_FAILURE_COUNT += 1
     if is_launch_schedule:
-        return None
-    return max(1.0, _seconds_until_auto_check(preferences))
+        _AUTO_LAUNCH_CHECK_PENDING = True
+    return _automatic_error_retry_seconds()
 
 
 def _manual_background_timer() -> float | None:
     preferences = _preferences()
     if preferences is None or _PROCESS_SOURCE != "manual_background":
         return None
-    completed, result = _poll_worker()
+    completed, result, requested_channel = _poll_worker()
     if not completed:
         return _POLL_SECONDS
+    if not _result_matches_channel(preferences, requested_channel):
+        if _start_worker(preferences, source="manual_background"):
+            return _POLL_SECONDS
+        return None
     _apply_result(preferences, result)
     return None
 
@@ -282,8 +334,9 @@ def _schedule_automatic_check(*, restart: bool = False) -> None:
 
 
 def _auto_check_changed(self, _context) -> None:
-    global _AUTO_LAUNCH_CHECK_PENDING
+    global _AUTO_FAILURE_COUNT, _AUTO_LAUNCH_CHECK_PENDING
 
+    _AUTO_FAILURE_COUNT = 0
     _AUTO_LAUNCH_CHECK_PENDING = bool(
         self.auto_check and self.check_interval == "LAUNCH"
     )
@@ -291,8 +344,9 @@ def _auto_check_changed(self, _context) -> None:
 
 
 def _check_schedule_changed(self, _context) -> None:
-    global _AUTO_LAUNCH_CHECK_PENDING
+    global _AUTO_FAILURE_COUNT, _AUTO_LAUNCH_CHECK_PENDING
 
+    _AUTO_FAILURE_COUNT = 0
     _AUTO_LAUNCH_CHECK_PENDING = bool(
         self.auto_check and self.check_interval == "LAUNCH"
     )
@@ -300,13 +354,15 @@ def _check_schedule_changed(self, _context) -> None:
 
 
 def _update_channel_changed(self, _context) -> None:
-    global _AUTO_LAUNCH_CHECK_PENDING
+    global _AUTO_FAILURE_COUNT, _AUTO_LAUNCH_CHECK_PENDING
 
+    _AUTO_FAILURE_COUNT = 0
     if self.last_channel and self.last_channel != self.update_channel:
         self.last_status = "NEVER"
         self.last_message = ""
         self.latest_version = ""
         self.download_url = ""
+        self.last_successful_check_at = 0.0
     if self.auto_check and self.check_interval == "LAUNCH":
         _AUTO_LAUNCH_CHECK_PENDING = True
     _schedule_automatic_check(restart=True)
@@ -382,15 +438,27 @@ class WM_OT_check_for_blender_updates(bpy.types.Operator):
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
 
-        completed, result = _poll_worker()
+        completed, result, requested_channel = _poll_worker()
         if not completed:
             return {"PASS_THROUGH"}
 
-        self._remove_event_timer(context)
         preferences = _preferences(context)
         if preferences is None:
+            self._remove_event_timer(context)
             self.report({"ERROR"}, "Could not save the update result")
             return {"CANCELLED"}
+        if not _result_matches_channel(preferences, requested_channel):
+            if _start_worker(preferences, source="manual_modal"):
+                self.report({"INFO"}, "Update channel changed; checking the new channel")
+                return {"PASS_THROUGH"}
+            self._remove_event_timer(context)
+            self.report(
+                {"ERROR"},
+                preferences.last_message or "Could not restart update check",
+            )
+            return {"CANCELLED"}
+
+        self._remove_event_timer(context)
         level, message = _apply_result(preferences, result)
         self.report({level}, message)
         return {"FINISHED"}
@@ -482,6 +550,7 @@ class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
         update=_check_schedule_changed,
     )
     last_checked_at: FloatProperty(default=0.0, options={"HIDDEN"})
+    last_successful_check_at: FloatProperty(default=0.0, options={"HIDDEN"})
     last_channel: StringProperty(default="", options={"HIDDEN"})
     last_status: EnumProperty(
         items=(
@@ -602,13 +671,14 @@ _CLASSES = (
 
 
 def register() -> None:
-    global _AUTO_LAUNCH_CHECK_PENDING
+    global _AUTO_FAILURE_COUNT, _AUTO_LAUNCH_CHECK_PENDING
 
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_help.append(_draw_help_menu)
     bpy.types.STATUSBAR_HT_header.append(_draw_statusbar_update)
     preferences = _preferences()
+    _AUTO_FAILURE_COUNT = 0
     _AUTO_LAUNCH_CHECK_PENDING = bool(
         preferences is not None
         and preferences.auto_check
@@ -618,8 +688,9 @@ def register() -> None:
 
 
 def unregister() -> None:
-    global _AUTO_LAUNCH_CHECK_PENDING
+    global _AUTO_FAILURE_COUNT, _AUTO_LAUNCH_CHECK_PENDING
 
+    _AUTO_FAILURE_COUNT = 0
     _AUTO_LAUNCH_CHECK_PENDING = False
     if bpy.app.timers.is_registered(_automatic_check_timer):
         bpy.app.timers.unregister(_automatic_check_timer)

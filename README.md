@@ -10,7 +10,10 @@ A modern Blender extension that checks Blender's official build service for new 
   and monthly schedules.
 - Every-launch checks run after a 45–90 second delay. Interval schedules keep
   recurring while Blender remains open.
+- Failed automatic checks retry after 15, 30, and then at most 60 minutes.
 - Stable, current-release-series, and daily-build channels.
+- If the channel changes during a check, the outdated result is ignored and the
+  newly selected channel is checked instead.
 - Available updates appear in Blender's status bar with shortcuts to the
   official download page and extension preferences.
 - Status-bar notifications can be dismissed or restored for the reported version or build.
