@@ -14,15 +14,19 @@ addon = bpy.context.preferences.addons.get(package_name)
 
 assert addon is not None
 assert addon.preferences.auto_check is False
-assert addon.preferences.check_on_launch is False
+assert addon.preferences.check_interval == "WEEKLY"
 assert addon.preferences.update_channel == "STABLE"
 assert hasattr(bpy.types, "WM_OT_check_for_blender_updates")
 assert hasattr(bpy.types, "WM_OT_set_blender_update_notification_visibility")
 assert not bpy.app.timers.is_registered(module._automatic_check_timer)
+addon.preferences.check_interval = "LAUNCH"
 addon.preferences.auto_check = True
 assert bpy.app.timers.is_registered(module._automatic_check_timer)
+assert module._AUTO_LAUNCH_CHECK_PENDING is True
 addon.preferences.auto_check = False
 assert not bpy.app.timers.is_registered(module._automatic_check_timer)
+assert module._AUTO_LAUNCH_CHECK_PENDING is False
+addon.preferences.check_interval = "WEEKLY"
 
 addon.preferences.last_status = "AVAILABLE"
 addon.preferences.latest_version = "5.3.0 alpha (abcdef123456)"

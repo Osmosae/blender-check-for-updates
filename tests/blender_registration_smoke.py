@@ -40,6 +40,9 @@ for interval, expected_seconds in (
     schedule_preferences.check_interval = interval
     remaining = module._seconds_until_auto_check(schedule_preferences)
     assert expected_seconds - 2.0 < remaining <= expected_seconds
+schedule_preferences.check_interval = "LAUNCH"
+assert module._seconds_until_auto_check(schedule_preferences) == 0.0
+schedule_preferences.check_interval = "WEEKLY"
 schedule_preferences.last_channel = "DAILY"
 assert module._seconds_until_auto_check(schedule_preferences) == 0.0
 

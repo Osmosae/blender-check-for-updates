@@ -154,6 +154,9 @@ def _poll_worker() -> tuple[bool, dict[str, Any] | None]:
 
 
 def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]:
+    global _AUTO_LAUNCH_CHECK_PENDING
+
+    _AUTO_LAUNCH_CHECK_PENDING = False
     preferences.last_checked_at = time.time()
     preferences.last_channel = preferences.update_channel
     if not result or not result.get("ok"):
@@ -196,6 +199,8 @@ def _terminate_worker() -> None:
 
 
 def _seconds_until_auto_check(preferences) -> float:
+    if preferences.check_interval == "LAUNCH":
+        return 0.0
     if preferences.last_channel != preferences.update_channel:
         return 0.0
     interval = _INTERVAL_SECONDS.get(
@@ -218,7 +223,7 @@ def _automatic_check_timer() -> float | None:
         if not completed:
             return _POLL_SECONDS
         _apply_result(preferences, result)
-        if not preferences.auto_check:
+        if not preferences.auto_check or preferences.check_interval == "LAUNCH":
             return None
         return max(1.0, _seconds_until_auto_check(preferences))
 
@@ -227,8 +232,14 @@ def _automatic_check_timer() -> float | None:
     if _PROCESS is not None:
         return _POLL_SECONDS
 
+    is_launch_schedule = preferences.check_interval == "LAUNCH"
     seconds_until_due = _seconds_until_auto_check(preferences)
-    should_check = _AUTO_LAUNCH_CHECK_PENDING or seconds_until_due <= 0.0
+    if is_launch_schedule:
+        if not _AUTO_LAUNCH_CHECK_PENDING:
+            return None
+        should_check = True
+    else:
+        should_check = seconds_until_due <= 0.0
     if not should_check:
         return max(1.0, seconds_until_due)
     if not bpy.app.online_access:
@@ -237,6 +248,8 @@ def _automatic_check_timer() -> float | None:
     _AUTO_LAUNCH_CHECK_PENDING = False
     if _start_worker(preferences, source="auto"):
         return _POLL_SECONDS
+    if is_launch_schedule:
+        return None
     return max(1.0, _seconds_until_auto_check(preferences))
 
 
@@ -268,16 +281,34 @@ def _schedule_automatic_check(*, restart: bool = False) -> None:
         )
 
 
-def _auto_check_changed(_self, _context) -> None:
+def _auto_check_changed(self, _context) -> None:
+    global _AUTO_LAUNCH_CHECK_PENDING
+
+    _AUTO_LAUNCH_CHECK_PENDING = bool(
+        self.auto_check and self.check_interval == "LAUNCH"
+    )
+    _schedule_automatic_check(restart=True)
+
+
+def _check_schedule_changed(self, _context) -> None:
+    global _AUTO_LAUNCH_CHECK_PENDING
+
+    _AUTO_LAUNCH_CHECK_PENDING = bool(
+        self.auto_check and self.check_interval == "LAUNCH"
+    )
     _schedule_automatic_check(restart=True)
 
 
 def _update_channel_changed(self, _context) -> None:
+    global _AUTO_LAUNCH_CHECK_PENDING
+
     if self.last_channel and self.last_channel != self.update_channel:
         self.last_status = "NEVER"
         self.last_message = ""
         self.latest_version = ""
         self.download_url = ""
+    if self.auto_check and self.check_interval == "LAUNCH":
+        _AUTO_LAUNCH_CHECK_PENDING = True
     _schedule_automatic_check(restart=True)
     _tag_redraw()
 
@@ -411,14 +442,6 @@ class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
         default=False,
         update=_auto_check_changed,
     )
-    check_on_launch: BoolProperty(
-        name="Check on Every Launch",
-        description=(
-            "Run one delayed update check whenever Blender starts, "
-            "even if the selected interval has not elapsed"
-        ),
-        default=False,
-    )
     update_channel: EnumProperty(
         name="Updates to Check",
         description="Choose which Blender release channel to compare",
@@ -443,15 +466,20 @@ class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
         update=_update_channel_changed,
     )
     check_interval: EnumProperty(
-        name="Check Frequency",
-        description="Minimum time between automatic checks",
+        name="Check Schedule",
+        description="Choose when automatic update checks run",
         items=(
+            (
+                "LAUNCH",
+                "Every Launch",
+                "Check once after Blender starts, following a short delay",
+            ),
             ("DAILY", "Daily", "Check at most once per day"),
             ("WEEKLY", "Weekly", "Check at most once per week"),
             ("MONTHLY", "Monthly", "Check at most once every 30 days"),
         ),
         default="WEEKLY",
-        update=_auto_check_changed,
+        update=_check_schedule_changed,
     )
     last_checked_at: FloatProperty(default=0.0, options={"HIDDEN"})
     last_channel: StringProperty(default="", options={"HIDDEN"})
@@ -484,12 +512,9 @@ class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
 
         layout.prop(self, "update_channel")
         layout.prop(self, "auto_check")
-        launch_row = layout.row()
-        launch_row.active = self.auto_check
-        launch_row.prop(self, "check_on_launch")
-        frequency_row = layout.row()
-        frequency_row.active = self.auto_check
-        frequency_row.prop(self, "check_interval")
+        schedule_row = layout.row()
+        schedule_row.active = self.auto_check
+        schedule_row.prop(self, "check_interval")
 
         layout.separator()
         status_box = layout.box()
@@ -587,7 +612,7 @@ def register() -> None:
     _AUTO_LAUNCH_CHECK_PENDING = bool(
         preferences is not None
         and preferences.auto_check
-        and preferences.check_on_launch
+        and preferences.check_interval == "LAUNCH"
     )
     _schedule_automatic_check()
 

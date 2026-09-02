@@ -6,8 +6,10 @@ A modern Blender extension that checks Blender's official build service for new 
 
 - Manual **Help → Check for Blender Updates** command.
 - Automatic checking is optional and disabled by default.
-- Automatic checks are delayed by 45–90 seconds and cached for the selected
-  daily, weekly, or monthly interval.
+- Automatic checking offers mutually exclusive every-launch, daily, weekly,
+  and monthly schedules.
+- Every-launch checks run after a 45–90 second delay. Interval schedules keep
+  recurring while Blender remains open.
 - Stable, current-release-series, and daily-build channels.
 - Available updates appear in Blender's status bar with shortcuts to the
   official download page and extension preferences.
