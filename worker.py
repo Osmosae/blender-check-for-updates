@@ -33,7 +33,7 @@ def main() -> int:
         args = _arguments()
         provider = _load_provider()
         result = provider.check_for_updates(
-            current_version=provider.parse_version(args.current_version),
+            current_version=args.current_version,
             current_hash=args.current_hash,
             channel=args.channel,
             package_format=args.package_format,

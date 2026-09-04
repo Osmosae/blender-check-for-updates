@@ -224,6 +224,7 @@ def _terminate_worker() -> None:
         process.wait(timeout=0.5)
     except subprocess.TimeoutExpired:
         process.kill()
+        process.wait()
 
 
 def _seconds_until_auto_check(preferences) -> float:

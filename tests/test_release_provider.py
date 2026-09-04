@@ -180,7 +180,7 @@ class FeedTests(unittest.TestCase):
 
     def test_stable_result_reports_current(self) -> None:
         result = provider.check_for_updates(
-            current_version=(5, 2, 1),
+            current_version="5.2.1",
             current_hash="irrelevant",
             channel="stable",
             payload=self.payload,

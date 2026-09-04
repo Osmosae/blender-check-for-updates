@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -81,6 +82,41 @@ completed, result, requested_channel = module._poll_worker()
 assert completed
 assert result == {"ok": False, "error": "test"}
 assert requested_channel == "DAILY"
+assert module._PROCESS is None
+assert module._PROCESS_SOURCE == ""
+assert module._PROCESS_CHANNEL == ""
+
+
+class StubbornProcess:
+    def __init__(self):
+        self.terminated = False
+        self.killed = False
+        self.reaped = False
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        if timeout is not None:
+            raise subprocess.TimeoutExpired("worker", timeout)
+        self.reaped = True
+        return -9
+
+    def kill(self):
+        self.killed = True
+
+
+stubborn_process = StubbornProcess()
+module._PROCESS = stubborn_process
+module._PROCESS_SOURCE = "auto"
+module._PROCESS_CHANNEL = "STABLE"
+module._terminate_worker()
+assert stubborn_process.terminated
+assert stubborn_process.killed
+assert stubborn_process.reaped
 assert module._PROCESS is None
 assert module._PROCESS_SOURCE == ""
 assert module._PROCESS_CHANNEL == ""

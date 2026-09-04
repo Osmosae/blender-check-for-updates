@@ -20,7 +20,7 @@ from typing import Any
 BUILDS_API_URL = "https://builder.blender.org/download/daily/?format=json&v=2"
 STABLE_DOWNLOAD_URL = "https://www.blender.org/download/"
 DAILY_DOWNLOAD_URL = "https://builder.blender.org/download/daily/"
-USER_AGENT = "Blender-Update-Checker/0.3.1"
+USER_AGENT = "Blender-Update-Checker/1.0.0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 8.0
 
@@ -260,7 +260,7 @@ def select_build(
 
 def check_for_updates(
     *,
-    current_version: tuple[int, int, int],
+    current_version: str | Iterable[int],
     current_hash: str,
     channel: str,
     package_format: str = "auto",
