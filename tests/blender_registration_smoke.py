@@ -14,7 +14,7 @@ import bpy
 
 root = Path.cwd()
 spec = importlib.util.spec_from_file_location(
-    "blender_update_checker",
+    "release_watcher",
     root / "__init__.py",
     submodule_search_locations=[str(root)],
 )

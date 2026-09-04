@@ -1,8 +1,8 @@
 schema_version = "1.0.0"
 
-id = "blender_update_checker"
+id = "release_watcher"
 version = "1.0.0"
-name = "Blender Update Checker"
+name = "Release Watcher"
 tagline = "Check for new Blender releases"
 maintainer = "Osmosae"
 type = "add-on"

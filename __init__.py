@@ -1,4 +1,4 @@
-"""Blender Update Checker extension entry point."""
+"""Release Watcher extension entry point."""
 
 from __future__ import annotations
 
@@ -513,7 +513,7 @@ class WM_OT_set_blender_update_notification_visibility(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class BlenderUpdateCheckerPreferences(bpy.types.AddonPreferences):
+class ReleaseWatcherPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
     auto_check: BoolProperty(
@@ -678,7 +678,7 @@ def _draw_statusbar_update(self, context: bpy.types.Context) -> None:
 _CLASSES = (
     WM_OT_check_for_blender_updates,
     WM_OT_set_blender_update_notification_visibility,
-    BlenderUpdateCheckerPreferences,
+    ReleaseWatcherPreferences,
 )
 
 

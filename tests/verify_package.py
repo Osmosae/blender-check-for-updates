@@ -45,7 +45,7 @@ def main() -> int:
                 raise AssertionError(f"Packaged file differs from source: {relative_path}")
 
     provider_source = (root / "release_provider.py").read_text("utf-8")
-    expected_agent = f'USER_AGENT = "Blender-Update-Checker/{version}"'
+    expected_agent = f'USER_AGENT = "Release-Watcher/{version}"'
     if expected_agent not in provider_source:
         raise AssertionError("Manifest version and network user-agent version differ")
 

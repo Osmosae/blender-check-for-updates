@@ -1,4 +1,4 @@
-# Blender Update Checker
+# Release Watcher
 
 [![CI](https://github.com/Osmosae/blender-check-for-updates/actions/workflows/ci.yml/badge.svg)](https://github.com/Osmosae/blender-check-for-updates/actions/workflows/ci.yml)
 
@@ -7,6 +7,9 @@ lets you know when a newer release is available.
 
 It supports Blender 4.2.1 and newer on Windows, macOS, and Linux. The extension
 only reports updates—it never downloads, installs, or replaces Blender.
+
+Release Watcher is an independent community extension and is not affiliated
+with or endorsed by the Blender Foundation.
 
 ## At a glance
 
@@ -18,6 +21,20 @@ menu:
 The same update can be opened, configured, or dismissed from the status bar:
 
 ![Blender status bar showing an available update](docs/images/status-bar-update.png)
+
+Automatic checks are opt-in and can be configured from the extension
+preferences:
+
+![Release Watcher preferences showing automatic update settings](docs/images/preferences-automatic-updates.png)
+
+## Why Release Watcher?
+
+Blender's 2021 roadmap [outlined native notifications for new releases](https://code.blender.org/2021/10/blender-3-x-roadmap/)
+as a future optional online feature, without assigning a delivery version or
+date. Until Blender offers an official built-in solution, Release Watcher
+provides a lightweight, independent notification layer. It only reports that a
+release is available and opens the official download page; it does not download
+or install Blender updates.
 
 ## Features
 
@@ -38,13 +55,13 @@ Automatic checks are disabled by default.
 
 ## Installation
 
-1. Download `blender_update_checker-x.y.z.zip` from the
+1. Download `release_watcher-x.y.z.zip` from the
    [latest release](https://github.com/Osmosae/blender-check-for-updates/releases/latest).
 2. Do not extract the ZIP.
 3. Drag the ZIP into Blender and confirm the installation, or select
    **Edit → Preferences → Extensions → Install from Disk**.
 4. To configure the extension, open Blender's add-on preferences and search for
-   **Blender Update Checker**.
+   **Release Watcher**.
 
 ## Update channels
 
@@ -107,5 +124,5 @@ profiles.
 
 ## License
 
-Blender Update Checker is available under the
+Release Watcher is available under the
 [GNU General Public License v3.0 or later](LICENSE).

@@ -8,7 +8,7 @@ from pathlib import Path
 import bpy
 
 
-package_name = "bl_ext.user_default.blender_update_checker"
+package_name = "bl_ext.user_default.release_watcher"
 module = importlib.import_module(package_name)
 addon = bpy.context.preferences.addons.get(package_name)
 
