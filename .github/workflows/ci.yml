@@ -25,8 +25,8 @@ jobs:
           - os: windows-latest
             python-version: "3.13"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile sources
@@ -40,12 +40,12 @@ jobs:
     env:
       BLENDER_VERSION: "5.2.1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Cache Blender archive
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/blender-cache
           key: blender-${{ runner.os }}-${{ env.BLENDER_VERSION }}
@@ -90,7 +90,7 @@ jobs:
       - name: Run installed-extension smoke test
         run: xvfb-run -a "$BLENDER_BIN" --background --python tests/blender_installed_smoke.py
       - name: Upload package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blender_update_checker-0.3.1
           path: ${{ runner.temp }}/package/blender_update_checker-0.3.1.zip
