@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "blender_update_checker"
-version = "0.3.0"
+version = "0.3.1"
 name = "Blender Update Checker"
 tagline = "Check for new Blender releases"
 maintainer = "Osmosae"
@@ -20,6 +20,8 @@ paths_exclude_pattern = [
   ".git/",
   ".gitignore",
   ".pytest_cache/",
+  ".blender-test/",
+  ".github/",
   "tests/",
   "*.zip",
 ]

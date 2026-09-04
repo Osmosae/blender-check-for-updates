@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile sources
+        run: python -m py_compile __init__.py release_provider.py worker.py
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+  blender-integration:
+    name: Blender integration and package
+    runs-on: ubuntu-latest
+    env:
+      BLENDER_VERSION: "5.2.1"
+      BLENDER_USER_CONFIG: ${{ runner.temp }}/blender-config
+      BLENDER_USER_EXTENSIONS: ${{ runner.temp }}/blender-extensions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Cache Blender archive
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-cache
+          key: blender-${{ runner.os }}-${{ env.BLENDER_VERSION }}
+      - name: Download and verify Blender
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/blender-cache" \
+            "$BLENDER_USER_CONFIG" \
+            "$BLENDER_USER_EXTENSIONS"
+          archive="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          base_url="https://download.blender.org/release/Blender5.2"
+          if [[ ! -f "$RUNNER_TEMP/blender-cache/$archive" ]]; then
+            curl --fail --location --retry 3 \
+              "$base_url/$archive" \
+              --output "$RUNNER_TEMP/blender-cache/$archive"
+          fi
+          curl --fail --location "$base_url/blender-${BLENDER_VERSION}.sha256" \
+            --output "$RUNNER_TEMP/blender-cache/checksums.sha256"
+          grep " $archive$" "$RUNNER_TEMP/blender-cache/checksums.sha256" \
+            > "$RUNNER_TEMP/blender-cache/archive.sha256"
+          cd "$RUNNER_TEMP/blender-cache"
+          sha256sum --check archive.sha256
+          tar -xf "$archive" -C "$RUNNER_TEMP"
+          echo "BLENDER_BIN=$RUNNER_TEMP/blender-${BLENDER_VERSION}-linux-x64/blender" \
+            >> "$GITHUB_ENV"
+      - name: Validate source manifest
+        run: xvfb-run -a "$BLENDER_BIN" --command extension validate
+      - name: Run Blender registration smoke test
+        run: xvfb-run -a "$BLENDER_BIN" --background --factory-startup --python tests/blender_registration_smoke.py
+      - name: Build extension package
+        run: |
+          mkdir -p "$RUNNER_TEMP/package"
+          xvfb-run -a "$BLENDER_BIN" --command extension build --output-dir "$RUNNER_TEMP/package"
+      - name: Verify package contents
+        run: python tests/verify_package.py "$RUNNER_TEMP/package/blender_update_checker-0.3.1.zip"
+      - name: Validate built package
+        run: xvfb-run -a "$BLENDER_BIN" --command extension validate "$RUNNER_TEMP/package/blender_update_checker-0.3.1.zip"
+      - name: Install built package
+        run: xvfb-run -a "$BLENDER_BIN" --command extension install-file -r user_default -e "$RUNNER_TEMP/package/blender_update_checker-0.3.1.zip"
+      - name: Run installed-extension smoke test
+        run: xvfb-run -a "$BLENDER_BIN" --background --python tests/blender_installed_smoke.py
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender_update_checker-0.3.1
+          path: ${{ runner.temp }}/package/blender_update_checker-0.3.1.zip
+          if-no-files-found: error

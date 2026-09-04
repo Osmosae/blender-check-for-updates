@@ -20,7 +20,7 @@ from typing import Any
 BUILDS_API_URL = "https://builder.blender.org/download/daily/?format=json&v=2"
 STABLE_DOWNLOAD_URL = "https://www.blender.org/download/"
 DAILY_DOWNLOAD_URL = "https://builder.blender.org/download/daily/"
-USER_AGENT = "Blender-Update-Checker/0.3"
+USER_AGENT = "Blender-Update-Checker/0.3.1"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 8.0
 
@@ -145,8 +145,11 @@ def parse_builds(payload: str) -> list[dict[str, Any]]:
         try:
             version = parse_version(str(raw["version"]))
             url = str(raw["url"])
-            hostname = urllib.parse.urlparse(url).hostname
-            if hostname not in _TRUSTED_BUILD_HOSTS:
+            parsed_url = urllib.parse.urlparse(url)
+            if (
+                parsed_url.scheme != "https"
+                or parsed_url.hostname not in _TRUSTED_BUILD_HOSTS
+            ):
                 continue
             file_mtime = int(raw["file_mtime"])
             if file_mtime < 0:
@@ -221,9 +224,25 @@ def select_build(
         label = "current release series" if channel == "series" else channel
         raise ReleaseProviderError(f"No builds were listed for the {label}")
 
-    newest_version = max(tuple(build["version_tuple"]) for build in candidates)
+    compatible_candidates = [
+        build
+        for build in candidates
+        if build.get("platform") == build_platform
+        and build.get("architecture") == architecture
+    ]
+    if not compatible_candidates:
+        label = "current release series" if channel == "series" else channel
+        raise ReleaseProviderError(
+            f"No {build_platform} {architecture} builds were listed for the {label}"
+        )
+
+    newest_version = max(
+        tuple(build["version_tuple"]) for build in compatible_candidates
+    )
     newest = [
-        build for build in candidates if tuple(build["version_tuple"]) == newest_version
+        build
+        for build in compatible_candidates
+        if tuple(build["version_tuple"]) == newest_version
     ]
     selected = _select_package(
         newest,

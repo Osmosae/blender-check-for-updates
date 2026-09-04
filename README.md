@@ -1,6 +1,10 @@
 # Blender Update Checker
 
+[![CI](https://github.com/Osmosae/blender-check-for-updates/actions/workflows/ci.yml/badge.svg)](https://github.com/Osmosae/blender-check-for-updates/actions/workflows/ci.yml)
+
 A modern Blender extension that checks Blender's official build service for new releases.
+
+Requires Blender 4.2.1 or newer.
 
 ## Current behavior
 
@@ -19,9 +23,12 @@ A modern Blender extension that checks Blender's official build service for new 
 - Status-bar notifications can be dismissed or restored for the reported version or build.
 - Automatic failures are silent. Status and errors remain available in the
   extension preferences.
+- Interrupted checks are recovered cleanly the next time the extension loads.
 - The extension opens an official Blender download page; it never installs or
   replaces Blender.
 
 ## Installation
 
-- Download blender_update_checker-x.y.z.zip from the Releases page. Do not extract it. Drag the ZIP into Blender and confirm the installation. Alternatively, use Edit → Preferences → Extensions → Install from Disk.
+- Download `blender_update_checker-x.y.z.zip` from the Releases page. Do not
+  extract it. Drag the ZIP into Blender and confirm the installation.
+  Alternatively, use Edit → Preferences → Extensions → Install from Disk.

@@ -166,6 +166,20 @@ def _result_matches_channel(preferences, requested_channel: str) -> bool:
     return not requested_channel or requested_channel == preferences.update_channel
 
 
+def _recover_stale_check(preferences) -> bool:
+    """Replace a persisted in-progress state when no worker survived restart."""
+
+    if (
+        preferences is None
+        or _PROCESS is not None
+        or preferences.last_status != "CHECKING"
+    ):
+        return False
+    preferences.last_status = "ERROR"
+    preferences.last_message = "The previous update check did not finish"
+    return True
+
+
 def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]:
     global _AUTO_FAILURE_COUNT, _AUTO_LAUNCH_CHECK_PENDING
 
@@ -190,10 +204,7 @@ def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]
         level = "INFO"
     else:
         preferences.last_status = "UP_TO_DATE"
-        if result.get("channel") == "daily":
-            preferences.last_message = "This daily build is current"
-        else:
-            preferences.last_message = "This Blender version is up to date"
+        preferences.last_message = "No newer build was found on this channel"
         level = "INFO"
     _tag_redraw()
     return level, preferences.last_message
@@ -679,6 +690,8 @@ def register() -> None:
     bpy.types.STATUSBAR_HT_header.append(_draw_statusbar_update)
     preferences = _preferences()
     _AUTO_FAILURE_COUNT = 0
+    if _recover_stale_check(preferences):
+        _tag_redraw()
     _AUTO_LAUNCH_CHECK_PENDING = bool(
         preferences is not None
         and preferences.auto_check

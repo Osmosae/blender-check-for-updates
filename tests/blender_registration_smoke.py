@@ -108,6 +108,7 @@ module._apply_result(
 )
 assert result_preferences.last_successful_check_at > 0.0
 assert module._AUTO_FAILURE_COUNT == 0
+assert result_preferences.last_message == "No newer build was found on this channel"
 last_successful_check_at = result_preferences.last_successful_check_at
 module._apply_result(result_preferences, {"ok": False, "error": "temporary failure"})
 assert result_preferences.last_status == "ERROR"
@@ -150,6 +151,15 @@ assert module._AUTO_FAILURE_COUNT == 2
 
 module._preferences = original_preferences
 module._AUTO_FAILURE_COUNT = 0
+
+stale_preferences = SimpleNamespace(
+    last_status="CHECKING",
+    last_message="Checking…",
+)
+assert module._recover_stale_check(stale_preferences)
+assert stale_preferences.last_status == "ERROR"
+assert stale_preferences.last_message == "The previous update check did not finish"
+assert not module._recover_stale_check(stale_preferences)
 
 assert hasattr(bpy.types, "WM_OT_check_for_blender_updates")
 assert hasattr(bpy.types, "WM_OT_set_blender_update_notification_visibility")
