@@ -39,8 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BLENDER_VERSION: "5.2.1"
-      BLENDER_USER_CONFIG: ${{ runner.temp }}/blender-config
-      BLENDER_USER_EXTENSIONS: ${{ runner.temp }}/blender-extensions
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -54,9 +52,11 @@ jobs:
       - name: Download and verify Blender
         shell: bash
         run: |
+          echo "BLENDER_USER_CONFIG=$RUNNER_TEMP/blender-config" >> "$GITHUB_ENV"
+          echo "BLENDER_USER_EXTENSIONS=$RUNNER_TEMP/blender-extensions" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/blender-cache" \
-            "$BLENDER_USER_CONFIG" \
-            "$BLENDER_USER_EXTENSIONS"
+            "$RUNNER_TEMP/blender-config" \
+            "$RUNNER_TEMP/blender-extensions"
           archive="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
           base_url="https://download.blender.org/release/Blender5.2"
           if [[ ! -f "$RUNNER_TEMP/blender-cache/$archive" ]]; then
