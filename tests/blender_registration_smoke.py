@@ -56,6 +56,9 @@ assert module._seconds_until_auto_check(schedule_preferences) == 0.0
 schedule_preferences.last_status = "UP_TO_DATE"
 remaining = module._seconds_until_auto_check(schedule_preferences)
 assert 7 * 24 * 60 * 60 - 2.0 < remaining <= 7 * 24 * 60 * 60
+schedule_preferences.last_successful_check_at_precise = repr(now - 60.0)
+remaining = module._seconds_until_auto_check(schedule_preferences)
+assert 7 * 24 * 60 * 60 - 62.0 < remaining < 7 * 24 * 60 * 60 - 58.0
 assert module._automatic_error_retry_seconds(1) == 15 * 60
 assert module._automatic_error_retry_seconds(2) == 30 * 60
 assert module._automatic_error_retry_seconds(3) == 60 * 60
@@ -124,7 +127,9 @@ assert module._PROCESS_CHANNEL == ""
 result_preferences = SimpleNamespace(
     update_channel="STABLE",
     last_checked_at=0.0,
+    last_checked_at_precise="",
     last_successful_check_at=0.0,
+    last_successful_check_at_precise="",
     last_channel="",
     last_status="NEVER",
     last_message="",
@@ -143,12 +148,14 @@ module._apply_result(
     },
 )
 assert result_preferences.last_successful_check_at > 0.0
+assert abs(module._last_checked_at(result_preferences) - time.time()) < 1.0
+assert abs(module._last_successful_check_at(result_preferences) - time.time()) < 1.0
 assert module._AUTO_FAILURE_COUNT == 0
 assert result_preferences.last_message == "No newer build was found on this channel"
-last_successful_check_at = result_preferences.last_successful_check_at
+last_successful_check_at = module._last_successful_check_at(result_preferences)
 module._apply_result(result_preferences, {"ok": False, "error": "temporary failure"})
 assert result_preferences.last_status == "ERROR"
-assert result_preferences.last_successful_check_at == last_successful_check_at
+assert module._last_successful_check_at(result_preferences) == last_successful_check_at
 
 timer_preferences = SimpleNamespace(
     auto_check=True,
@@ -187,6 +194,15 @@ assert module._AUTO_FAILURE_COUNT == 2
 
 module._preferences = original_preferences
 module._AUTO_FAILURE_COUNT = 0
+
+module._preferences = lambda _context=None: timer_preferences
+timer_preferences.auto_check = True
+module._schedule_automatic_check()
+assert bpy.app.timers.is_registered(module._automatic_check_timer)
+bpy.ops.wm.read_factory_settings(use_empty=True)
+assert bpy.app.timers.is_registered(module._automatic_check_timer)
+bpy.app.timers.unregister(module._automatic_check_timer)
+module._preferences = original_preferences
 
 stale_preferences = SimpleNamespace(
     last_status="CHECKING",

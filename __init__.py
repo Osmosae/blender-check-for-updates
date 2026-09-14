@@ -119,7 +119,7 @@ def _start_worker(preferences, *, source: str) -> bool:
     except OSError as exc:
         preferences.last_status = "ERROR"
         preferences.last_message = f"Could not start the update checker: {exc}"
-        preferences.last_checked_at = time.time()
+        _set_last_checked_at(preferences, time.time())
         preferences.last_channel = preferences.update_channel
         _PROCESS = None
         _PROCESS_SOURCE = ""
@@ -166,6 +166,67 @@ def _result_matches_channel(preferences, requested_channel: str) -> bool:
     return not requested_channel or requested_channel == preferences.update_channel
 
 
+def _stored_timestamp(preferences, precise_name: str, legacy_name: str) -> float:
+    """Read a timestamp without relying on Blender's low-precision RNA floats."""
+
+    precise_value = getattr(preferences, precise_name, "")
+    if precise_value:
+        try:
+            return float(precise_value)
+        except (TypeError, ValueError):
+            pass
+    try:
+        return float(getattr(preferences, legacy_name, 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _last_checked_at(preferences) -> float:
+    return _stored_timestamp(
+        preferences,
+        "last_checked_at_precise",
+        "last_checked_at",
+    )
+
+
+def _last_successful_check_at(preferences) -> float:
+    return _stored_timestamp(
+        preferences,
+        "last_successful_check_at_precise",
+        "last_successful_check_at",
+    )
+
+
+def _store_timestamp(
+    preferences,
+    precise_name: str,
+    legacy_name: str,
+    value: float,
+) -> None:
+    setattr(preferences, precise_name, repr(float(value)) if value > 0.0 else "")
+    # Retain the old value for compatibility with preferences saved by earlier
+    # extension versions. Scheduling and display use the precise string above.
+    setattr(preferences, legacy_name, value)
+
+
+def _set_last_checked_at(preferences, value: float) -> None:
+    _store_timestamp(
+        preferences,
+        "last_checked_at_precise",
+        "last_checked_at",
+        value,
+    )
+
+
+def _set_last_successful_check_at(preferences, value: float) -> None:
+    _store_timestamp(
+        preferences,
+        "last_successful_check_at_precise",
+        "last_successful_check_at",
+        value,
+    )
+
+
 def _recover_stale_check(preferences) -> bool:
     """Replace a persisted in-progress state when no worker survived restart."""
 
@@ -185,7 +246,7 @@ def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]
 
     _AUTO_LAUNCH_CHECK_PENDING = False
     checked_at = time.time()
-    preferences.last_checked_at = checked_at
+    _set_last_checked_at(preferences, checked_at)
     preferences.last_channel = preferences.update_channel
     if not result or not result.get("ok"):
         message = str((result or {}).get("error", "The update checker stopped"))
@@ -195,7 +256,7 @@ def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]
         return "WARNING", preferences.last_message
 
     _AUTO_FAILURE_COUNT = 0
-    preferences.last_successful_check_at = checked_at
+    _set_last_successful_check_at(preferences, checked_at)
     preferences.latest_version = str(result.get("display_version", ""))
     preferences.download_url = str(result.get("download_url", ""))
     if result.get("update_available"):
@@ -236,13 +297,13 @@ def _seconds_until_auto_check(preferences) -> float:
         preferences.check_interval,
         _INTERVAL_SECONDS["WEEKLY"],
     )
-    last_successful_check_at = preferences.last_successful_check_at
+    last_successful_check_at = _last_successful_check_at(preferences)
     if (
         last_successful_check_at <= 0.0
         and preferences.last_status in {"UP_TO_DATE", "AVAILABLE"}
     ):
         # Preserve schedules created before last_successful_check_at was introduced.
-        last_successful_check_at = preferences.last_checked_at
+        last_successful_check_at = _last_checked_at(preferences)
     elapsed = max(0.0, time.time() - last_successful_check_at)
     return max(0.0, interval - elapsed)
 
@@ -342,6 +403,7 @@ def _schedule_automatic_check(*, restart: bool = False) -> None:
         bpy.app.timers.register(
             _automatic_check_timer,
             first_interval=random.uniform(_AUTO_START_DELAY_MIN, _AUTO_START_DELAY_MAX),
+            persistent=True,
         )
 
 
@@ -374,7 +436,7 @@ def _update_channel_changed(self, _context) -> None:
         self.last_message = ""
         self.latest_version = ""
         self.download_url = ""
-        self.last_successful_check_at = 0.0
+        _set_last_successful_check_at(self, 0.0)
     if self.auto_check and self.check_interval == "LAUNCH":
         _AUTO_LAUNCH_CHECK_PENDING = True
     _schedule_automatic_check(restart=True)
@@ -562,7 +624,9 @@ class ReleaseWatcherPreferences(bpy.types.AddonPreferences):
         update=_check_schedule_changed,
     )
     last_checked_at: FloatProperty(default=0.0, options={"HIDDEN"})
+    last_checked_at_precise: StringProperty(default="", options={"HIDDEN"})
     last_successful_check_at: FloatProperty(default=0.0, options={"HIDDEN"})
+    last_successful_check_at_precise: StringProperty(default="", options={"HIDDEN"})
     last_channel: StringProperty(default="", options={"HIDDEN"})
     last_status: EnumProperty(
         items=(
@@ -619,9 +683,10 @@ class ReleaseWatcherPreferences(bpy.types.AddonPreferences):
         else:
             status_box.label(text="No update check has been run", icon="QUESTION")
 
-        if self.last_checked_at > 0.0:
-            checked = _datetime.datetime.fromtimestamp(self.last_checked_at).astimezone()
-            status_box.label(text=f"Last checked: {checked:%Y-%m-%d %H:%M}")
+        last_checked_at = _last_checked_at(self)
+        if last_checked_at > 0.0:
+            checked = _datetime.datetime.fromtimestamp(last_checked_at).astimezone()
+            status_box.label(text=f"Last checked: {checked:%Y-%m-%d %H:%M:%S}")
 
         status_box.operator(
             WM_OT_check_for_blender_updates.bl_idname,

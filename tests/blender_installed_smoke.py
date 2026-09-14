@@ -17,6 +17,8 @@ assert addon.preferences.auto_check is False
 assert addon.preferences.check_interval == "WEEKLY"
 assert addon.preferences.update_channel == "STABLE"
 assert addon.preferences.last_successful_check_at == 0.0
+assert addon.preferences.last_checked_at_precise == ""
+assert addon.preferences.last_successful_check_at_precise == ""
 assert hasattr(bpy.types, "WM_OT_check_for_blender_updates")
 assert hasattr(bpy.types, "WM_OT_set_blender_update_notification_visibility")
 assert not bpy.app.timers.is_registered(module._automatic_check_timer)

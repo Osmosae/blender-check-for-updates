@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0
+
+- Keep the delayed automatic-check timer alive while Blender loads its startup
+  or project file, so every-launch checks actually run.
+- Preserve full timestamp precision and display seconds so completed launch
+  checks reliably update the visible last-check time.
+
 ## 1.0.0
 
 - Rename the extension to Release Watcher for Blender Extensions branding

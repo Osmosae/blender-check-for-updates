@@ -29,10 +29,11 @@ preferences:
 
 ## Why Release Watcher?
 
-Blender's 2021 roadmap [outlined native notifications for new releases](https://code.blender.org/2021/10/blender-3-x-roadmap/)
-as a future optional online feature, without assigning a delivery version or
-date. Until Blender offers an official built-in solution, Release Watcher
-provides a lightweight, independent notification layer. It only reports that a
+Blender's open [Update Notifier design task](https://projects.blender.org/blender/blender/issues/149136)
+proposes built-in release notifications, with optional self-updates as a
+longer-term goal. The proposal is currently marked **Design in-progress** and
+does not have a target release. Until that work ships, Release Watcher provides
+an independent implementation of the notification part. It only reports that a
 release is available and opens the official download page; it does not download
 or install Blender updates.
 
