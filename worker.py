@@ -23,6 +23,10 @@ def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--current-version", required=True)
     parser.add_argument("--current-hash", default="")
+    parser.add_argument(
+        "--current-cycle", choices=("alpha", "beta", "rc", "release"), default="release"
+    )
+    parser.add_argument("--current-commit-timestamp", type=int, default=0)
     parser.add_argument("--channel", choices=("stable", "series", "daily"), required=True)
     parser.add_argument("--package-format", default="auto")
     return parser.parse_args()
@@ -35,6 +39,8 @@ def main() -> int:
         result = provider.check_for_updates(
             current_version=args.current_version,
             current_hash=args.current_hash,
+            current_cycle=args.current_cycle,
+            current_commit_timestamp=args.current_commit_timestamp,
             channel=args.channel,
             package_format=args.package_format,
         )

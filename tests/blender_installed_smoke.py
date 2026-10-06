@@ -48,7 +48,9 @@ assert addon.preferences.dismissed_version == ""
 assert module._notification_visible(addon.preferences)
 
 command = module._worker_command(addon.preferences)
-assert Path(command[-9]).name == "worker.py"
+assert any(Path(argument).name == "worker.py" for argument in command)
+assert command[command.index("--current-cycle") + 1] == bpy.app.version_cycle
+assert int(command[command.index("--current-commit-timestamp") + 1]) == bpy.app.build_commit_timestamp
 assert "-I" in command
 assert command[-2:] == ["--package-format", "auto"]
 

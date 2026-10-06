@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 import urllib.error
 
 import release_provider as provider
@@ -81,7 +82,7 @@ class FeedTests(unittest.TestCase):
             build("5.2.0", mtime=20),
             build("5.2.1", mtime=30),
             build("5.2.1", platform="linux", architecture="x86_64", extension="xz", mtime=31),
-            build("5.3.0", cycle="alpha", build_hash="newdailyhash", mtime=40),
+            build("5.3.0", cycle="alpha", build_hash="abcdef123456", mtime=40),
         ]
         self.payload = json.dumps(self.records)
 
@@ -189,10 +190,13 @@ class FeedTests(unittest.TestCase):
         )
         self.assertFalse(result["update_available"])
 
-    def test_daily_result_compares_build_hash(self) -> None:
+    @patch.object(provider, "fetch_commit_timestamp", return_value=40)
+    def test_daily_result_compares_build_hash(self, fetch_timestamp) -> None:
         old_result = provider.check_for_updates(
             current_version=(5, 3, 0),
-            current_hash="olddailyhash",
+            current_hash="111111111111",
+            current_cycle="alpha",
+            current_commit_timestamp=30,
             channel="daily",
             payload=self.payload,
             sys_platform="win32",
@@ -200,7 +204,9 @@ class FeedTests(unittest.TestCase):
         )
         current_result = provider.check_for_updates(
             current_version=(5, 3, 0),
-            current_hash="newdailyhash",
+            current_hash="abcdef123456",
+            current_cycle="alpha",
+            current_commit_timestamp=40,
             channel="daily",
             payload=self.payload,
             sys_platform="win32",
@@ -209,6 +215,90 @@ class FeedTests(unittest.TestCase):
         self.assertTrue(old_result["update_available"])
         self.assertFalse(current_result["update_available"])
         self.assertEqual(old_result["download_url"], provider.DAILY_DOWNLOAD_URL)
+        fetch_timestamp.assert_called_once_with("abcdef123456")
+
+    def check_beta(self, records, **overrides):
+        arguments = dict(
+            current_version="5.3.0",
+            current_hash="111111111111",
+            current_cycle="beta",
+            current_commit_timestamp=100,
+            channel="series",
+            payload=json.dumps(records),
+            sys_platform="win32",
+            machine="AMD64",
+        )
+        arguments.update(overrides)
+        return provider.check_for_updates(**arguments)
+
+    @patch.object(provider, "fetch_commit_timestamp", return_value=110)
+    def test_beta_series_tracks_same_version_not_next_alpha(self, fetch_timestamp) -> None:
+        result = self.check_beta([
+            build("5.3.0", cycle="beta", mtime=120),
+            build("5.4.0", cycle="alpha", mtime=130),
+        ])
+        self.assertTrue(result["update_available"])
+        self.assertEqual(result["latest_version"], "5.3.0")
+        self.assertEqual(result["release_cycle"], "beta")
+        self.assertIn("abcdef123456", result["display_version"])
+        fetch_timestamp.assert_called_once()
+
+    @patch.object(provider, "fetch_commit_timestamp")
+    def test_daily_can_offer_next_alpha_to_beta_user(self, fetch_timestamp) -> None:
+        result = self.check_beta([
+            build("5.3.0", cycle="beta"),
+            build("5.4.0", cycle="alpha"),
+        ], channel="daily")
+        self.assertTrue(result["update_available"])
+        self.assertEqual(result["latest_version"], "5.4.0")
+        fetch_timestamp.assert_not_called()
+
+    @patch.object(provider, "fetch_commit_timestamp")
+    def test_same_hash_accepts_short_or_full_case_insensitive_hash(self, fetch_timestamp) -> None:
+        for current_hash in ("ABCDEF123456", "abcdef123456" + "0" * 28):
+            with self.subTest(current_hash=current_hash):
+                result = self.check_beta([build("5.3.0", cycle="beta")], current_hash=current_hash)
+                self.assertFalse(result["update_available"])
+        fetch_timestamp.assert_not_called()
+
+    @patch.object(provider, "fetch_commit_timestamp", return_value=90)
+    def test_older_commit_is_not_update_despite_later_upload(self, _fetch_timestamp) -> None:
+        result = self.check_beta([build("5.3.0", cycle="beta", mtime=1000)])
+        self.assertFalse(result["update_available"])
+
+    @patch.object(provider, "fetch_commit_timestamp", side_effect=provider.ReleaseProviderError("offline"))
+    def test_unverified_commit_reports_error(self, _fetch_timestamp) -> None:
+        with self.assertRaisesRegex(provider.ReleaseProviderError, "Could not verify"):
+            self.check_beta([build("5.3.0", cycle="beta")])
+
+    def test_beta_to_final_is_update_without_number_change(self) -> None:
+        for channel in ("stable", "series"):
+            with self.subTest(channel=channel):
+                result = self.check_beta([build("5.3.0")], channel=channel)
+                self.assertTrue(result["update_available"])
+                self.assertEqual(result["download_url"], provider.STABLE_DOWNLOAD_URL)
+
+    def test_rc_selected_over_stale_beta_and_alpha(self) -> None:
+        result = self.check_beta([
+            build("5.3.0", cycle="alpha", mtime=300),
+            build("5.3.0", cycle="beta", mtime=200),
+            build("5.3.0", cycle="candidate", mtime=100),
+        ])
+        self.assertTrue(result["update_available"])
+        self.assertEqual(result["release_cycle"], "rc")
+
+    def test_stable_series_does_not_offer_next_prerelease(self) -> None:
+        result = self.check_beta([
+            build("5.3.0"),
+            build("5.3.1", cycle="rc", mtime=200),
+        ], current_cycle="release")
+        self.assertFalse(result["update_available"])
+
+    def test_daily_does_not_downgrade_release_stage_or_version(self) -> None:
+        for version, cycle in (("5.3.0", "alpha"), ("5.2.3", "rc")):
+            with self.subTest(version=version, cycle=cycle):
+                result = self.check_beta([build(version, cycle=cycle)], channel="daily")
+                self.assertFalse(result["update_available"])
 
     def test_rejects_malformed_feed(self) -> None:
         with self.assertRaises(provider.ReleaseProviderError):
@@ -258,6 +348,108 @@ class NetworkTests(unittest.TestCase):
 
         with self.assertRaisesRegex(provider.ReleaseProviderError, "timed out"):
             provider.fetch_builds_json(opener=opener)
+
+
+def html_build(
+    filename="blender-5.3.0-beta+v53.abcdef123456-windows.amd64-release.zip",
+    *,
+    date="2026-10-15T05:42:10+00:00",
+    host="cdn.builder.blender.org",
+):
+    return (
+        '<li class="t-row build is-windows">'
+        f'<a class="t-cell b-version" href="https://{host}/download/daily/{filename}">Blender</a>'
+        f'<div class="t-cell b-date" title="{date}">15 Oct 05:42</div></li>'
+    )
+
+
+class FallbackTests(unittest.TestCase):
+    def test_parses_download_rows_ignoring_checksums_and_untrusted_hosts(self) -> None:
+        filename = "blender-5.3.0-beta+v53.abcdef123456-windows.amd64-release.zip"
+        payload = "<html><ul>" + "".join([
+            html_build(filename + ".sha256"),
+            html_build(filename),
+            html_build(host="example.invalid"),
+            html_build(date="not a date"),
+            html_build(filename.replace("-release.zip", "-debug.zip")),
+        ]) + "</ul></html>"
+        builds = provider.parse_builds_html(payload)
+        self.assertEqual(len(builds), 1)
+        self.assertEqual(builds[0]["hash"], "abcdef123456")
+        self.assertEqual(builds[0]["version_tuple"], (5, 3, 0))
+        self.assertEqual(builds[0]["file_mtime"], 1792042930)
+
+    def test_parses_mac_and_linux_packages(self) -> None:
+        for platform, arch, extension, expected in (
+            ("darwin", "arm64", "dmg", "dmg"),
+            ("linux", "x86_64", "tar.xz", "xz"),
+        ):
+            with self.subTest(platform=platform):
+                rows = provider.parse_builds_html(html_build(
+                    f"blender-5.3.0-beta+v53.abcdef123456-{platform}.{arch}-release.{extension}"
+                ))
+                self.assertEqual(rows[0]["platform"], platform)
+                self.assertEqual(rows[0]["architecture"], arch)
+                self.assertEqual(rows[0]["file_extension"], expected)
+
+    def test_healthy_json_feed_does_not_request_html(self) -> None:
+        calls = []
+
+        def opener(request, **_kwargs):
+            calls.append(request.full_url)
+            return FakeResponse(json.dumps([build("5.3.0", cycle="beta")]).encode())
+
+        self.assertEqual(len(provider.fetch_builds(opener=opener)), 1)
+        self.assertEqual(calls, [provider.BUILDS_API_URL])
+
+    def test_php_fatal_error_labelled_json_uses_html_fallback(self) -> None:
+        calls = []
+
+        def opener(request, **_kwargs):
+            calls.append(request.full_url)
+            if request.full_url == provider.BUILDS_API_URL:
+                return FakeResponse(b"<br /><b>Fatal error</b>: undefined method")
+            return FakeResponse(html_build().encode(), "text/html")
+
+        builds = provider.fetch_builds(opener=opener)
+        self.assertEqual(builds[0]["version_tuple"], (5, 3, 0))
+        self.assertEqual(calls, [provider.BUILDS_API_URL, provider.DAILY_DOWNLOAD_URL])
+
+    def test_both_broken_sources_report_service_error(self) -> None:
+        def opener(request, **_kwargs):
+            return FakeResponse(b"error", "application/json" if "format=json" in request.full_url else "text/html")
+
+        with self.assertRaisesRegex(provider.ReleaseProviderError, "build service is unavailable"):
+            provider.fetch_builds(opener=opener)
+
+    def test_json_checksum_is_not_selected_as_build(self) -> None:
+        package = build("5.3.0", cycle="beta")
+        checksum = {**package, "url": package["url"] + ".sha256", "file_mtime": 200}
+        self.assertEqual(len(provider.parse_builds(json.dumps([package, checksum]))), 1)
+
+
+class CommitTests(unittest.TestCase):
+    @patch.object(provider, "_fetch_text")
+    def test_uses_committer_not_author_or_upload_time(self, fetch_text) -> None:
+        fetch_text.return_value = json.dumps({
+            "sha": "abcdef123456" + "0" * 28,
+            "commit": {
+                "author": {"date": "2026-10-01T00:00:00Z"},
+                "committer": {"date": "2026-10-15T12:15:01+11:00"},
+            },
+        })
+        self.assertEqual(provider.fetch_commit_timestamp("abcdef123456"), 1792026901)
+
+    @patch.object(provider, "_fetch_text")
+    def test_rejects_mismatched_or_malformed_commit_metadata(self, fetch_text) -> None:
+        for payload in ("<html>error</html>", "{}", json.dumps({
+            "sha": "111111111111",
+            "commit": {"committer": {"date": "2026-10-15T01:15:01Z"}},
+        })):
+            with self.subTest(payload=payload):
+                fetch_text.return_value = payload
+                with self.assertRaises(provider.ReleaseProviderError):
+                    provider.fetch_commit_timestamp("abcdef123456")
 
 
 if __name__ == "__main__":

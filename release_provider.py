@@ -6,6 +6,8 @@ the background worker and tested with a regular Python interpreter.
 
 from __future__ import annotations
 
+import datetime as datetime_module
+from html.parser import HTMLParser
 import json
 import platform as platform_module
 import re
@@ -20,12 +22,23 @@ from typing import Any
 BUILDS_API_URL = "https://builder.blender.org/download/daily/?format=json&v=2"
 STABLE_DOWNLOAD_URL = "https://www.blender.org/download/"
 DAILY_DOWNLOAD_URL = "https://builder.blender.org/download/daily/"
-USER_AGENT = "Release-Watcher/1.1.0"
+USER_AGENT = "Release-Watcher/1.2.0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 8.0
+COMMIT_API_URL = "https://projects.blender.org/api/v1/repos/blender/blender/git/commits/"
 
 _VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _TRUSTED_BUILD_HOSTS = {"cdn.builder.blender.org"}
+_PACKAGE_EXTENSIONS = {"zip", "msi", "msix", "dmg", "xz"}
+_CYCLE_RANK = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}
+_BUILD_FILENAME_PATTERN = re.compile(
+    r"^blender-(?P<version>\d+\.\d+\.\d+)-"
+    r"(?P<release_cycle>alpha|beta|rc|candidate|stable)\+"
+    r"(?P<branch>[\w.-]+)\.(?P<hash>[0-9a-fA-F]{7,40})-"
+    r"(?P<platform>windows|darwin|linux)\."
+    r"(?P<architecture>amd64|x86_64|arm64)-release\."
+    r"(?P<file_extension>zip|msi|msix|dmg|tar\.xz)$"
+)
 
 
 class ReleaseProviderError(RuntimeError):
@@ -92,22 +105,24 @@ def preferred_extension(build_platform: str, package_format: str) -> str:
     }[build_platform]
 
 
-def fetch_builds_json(
+def _fetch_text(
+    url: str,
     *,
+    content_types: set[str],
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     opener: Callable[..., Any] = urllib.request.urlopen,
 ) -> str:
-    """Fetch Blender's official machine-readable builds listing."""
+    """Fetch a bounded UTF-8 response from an official Blender service."""
 
     request = urllib.request.Request(
-        BUILDS_API_URL,
-        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+        url,
+        headers={"Accept": ", ".join(sorted(content_types)), "User-Agent": USER_AGENT},
         method="GET",
     )
     try:
         with opener(request, timeout=timeout) as response:
             content_type = response.headers.get_content_type()
-            if content_type not in {"application/json", "text/json", "text/plain"}:
+            if content_type not in content_types:
                 raise ReleaseProviderError(
                     f"Unexpected response type: {content_type or 'unknown'}"
                 )
@@ -128,6 +143,114 @@ def fetch_builds_json(
         raise ReleaseProviderError("Blender's build listing was not valid UTF-8") from exc
 
 
+def fetch_builds_json(
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> str:
+    """Fetch Blender's official machine-readable builds listing."""
+
+    return _fetch_text(
+        BUILDS_API_URL,
+        content_types={"application/json", "text/json", "text/plain"},
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+def _iso_timestamp(value: str) -> int:
+    parsed = datetime_module.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("Timestamp is missing its timezone")
+    return int(parsed.timestamp())
+
+
+class _BuildListingParser(HTMLParser):
+    """Read download URLs and ISO dates from the official build table."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[dict[str, Any]] = []
+        self._row: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = (attributes.get("class") or "").split()
+        if tag == "li" and "build" in classes:
+            self._row = {}
+        if self._row is None:
+            return
+        if tag == "a" and "b-version" in classes:
+            url = attributes.get("href") or ""
+            name = urllib.parse.unquote(urllib.parse.urlparse(url).path.rsplit("/", 1)[-1])
+            match = _BUILD_FILENAME_PATTERN.fullmatch(name)
+            if match:
+                self._row.update(match.groupdict())
+                self._row.update(app="Blender", url=url, file_name=name)
+                if self._row["file_extension"] == "tar.xz":
+                    self._row["file_extension"] = "xz"
+        if "b-date" in classes:
+            try:
+                self._row["file_mtime"] = _iso_timestamp(attributes.get("title") or "")
+            except (ValueError, OverflowError):
+                pass
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "li" and self._row is not None:
+            self.records.append(self._row)
+            self._row = None
+
+
+def parse_builds_html(payload: str) -> list[dict[str, Any]]:
+    parser = _BuildListingParser()
+    parser.feed(payload)
+    parser.close()
+    return _validate_builds(parser.records)
+
+
+def fetch_builds(
+    *,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+) -> list[dict[str, Any]]:
+    """Use the download table when the JSON service is unavailable or broken."""
+
+    try:
+        return parse_builds(fetch_builds_json(timeout=timeout, opener=opener))
+    except ReleaseProviderError as json_error:
+        try:
+            return parse_builds_html(_fetch_text(
+                DAILY_DOWNLOAD_URL,
+                content_types={"text/html"},
+                timeout=timeout,
+                opener=opener,
+            ))
+        except ReleaseProviderError as html_error:
+            raise ReleaseProviderError(
+                f"Blender's build service is unavailable. JSON feed: {json_error}. "
+                f"Download listing: {html_error}"
+            ) from html_error
+
+
+def fetch_commit_timestamp(build_hash: str) -> int:
+    """Use commit time, not archive upload time, to establish build ordering."""
+
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", build_hash):
+        raise ReleaseProviderError("The build listing did not provide a valid commit hash")
+    payload = _fetch_text(
+        COMMIT_API_URL + build_hash,
+        content_types={"application/json"},
+    )
+    try:
+        record = json.loads(payload)
+        resolved_hash = record["sha"].lower()
+        if not resolved_hash.startswith(build_hash.lower()):
+            raise ValueError("Commit hash did not match the requested build")
+        return _iso_timestamp(record["commit"]["committer"]["date"])
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
+        raise ReleaseProviderError("Blender's commit information was not valid") from exc
+
+
 def parse_builds(payload: str) -> list[dict[str, Any]]:
     """Parse and minimally validate build records from the official feed."""
 
@@ -137,7 +260,10 @@ def parse_builds(payload: str) -> list[dict[str, Any]]:
         raise ReleaseProviderError("Blender's build listing was not valid JSON") from exc
     if not isinstance(raw_builds, list):
         raise ReleaseProviderError("Blender's build listing had an unexpected shape")
+    return _validate_builds(raw_builds)
 
+
+def _validate_builds(raw_builds: Iterable[Any]) -> list[dict[str, Any]]:
     builds: list[dict[str, Any]] = []
     for raw in raw_builds:
         if not isinstance(raw, Mapping) or raw.get("app") != "Blender":
@@ -155,6 +281,14 @@ def parse_builds(payload: str) -> list[dict[str, Any]]:
             if file_mtime < 0:
                 continue
             build = dict(raw)
+            cycle = str(raw.get("release_cycle", "")).lower()
+            build["release_cycle"] = "rc" if cycle == "candidate" else cycle
+            if (
+                build["release_cycle"] not in _CYCLE_RANK
+                or build.get("file_extension") not in _PACKAGE_EXTENSIONS
+                or parsed_url.path.endswith((".sha256", ".sha512", ".md5"))
+            ):
+                continue
             build["version_tuple"] = version
             build["file_mtime"] = file_mtime
             builds.append(build)
@@ -194,6 +328,7 @@ def select_build(
     builds: Iterable[Mapping[str, Any]],
     *,
     current_version: tuple[int, int, int],
+    current_cycle: str = "release",
     channel: str,
     build_platform: str,
     architecture: str,
@@ -204,8 +339,13 @@ def select_build(
     channel = channel.lower()
     all_builds = list(builds)
     if channel in {"stable", "series"}:
+        follow_prereleases = (
+            channel == "series" and current_cycle in {"alpha", "beta", "rc"}
+        )
         candidates = [
-            build for build in all_builds if build.get("release_cycle") == "stable"
+            build
+            for build in all_builds
+            if follow_prereleases or build.get("release_cycle") == "stable"
         ]
         if channel == "series":
             candidates = [
@@ -244,6 +384,12 @@ def select_build(
         for build in compatible_candidates
         if tuple(build["version_tuple"]) == newest_version
     ]
+    newest_cycle = max(_CYCLE_RANK[str(build["release_cycle"])] for build in newest)
+    newest = [
+        build
+        for build in newest
+        if _CYCLE_RANK[str(build["release_cycle"])] == newest_cycle
+    ]
     selected = _select_package(
         newest,
         build_platform=build_platform,
@@ -262,6 +408,8 @@ def check_for_updates(
     *,
     current_version: str | Iterable[int],
     current_hash: str,
+    current_cycle: str = "release",
+    current_commit_timestamp: int = 0,
     channel: str,
     package_format: str = "auto",
     payload: str | None = None,
@@ -272,10 +420,11 @@ def check_for_updates(
 
     current_version = parse_version(current_version)
     build_platform, architecture = platform_identity(sys_platform, machine)
-    builds = parse_builds(payload if payload is not None else fetch_builds_json())
+    builds = parse_builds(payload) if payload is not None else fetch_builds()
     selected = select_build(
         builds,
         current_version=current_version,
+        current_cycle=current_cycle,
         channel=channel,
         build_platform=build_platform,
         architecture=architecture,
@@ -283,20 +432,40 @@ def check_for_updates(
     )
 
     latest_version = tuple(selected["version_tuple"])
-    latest_hash = str(selected.get("hash", ""))
+    latest_hash = str(selected.get("hash", "")).strip().lower()
+    current_hash = current_hash.strip().lower()
     is_daily = channel.lower() == "daily"
-    if is_daily:
-        update_available = latest_version > current_version or (
-            latest_version == current_version
-            and bool(latest_hash)
-            and latest_hash != current_hash
-        )
-    else:
-        update_available = latest_version > current_version
+    cycle = str(selected.get("release_cycle", ""))
+    current_cycle = "stable" if current_cycle == "release" else current_cycle
+    update_available = latest_version > current_version
+    if latest_version == current_version:
+        latest_rank = _CYCLE_RANK[cycle]
+        current_rank = _CYCLE_RANK.get(current_cycle, _CYCLE_RANK["stable"])
+        if latest_rank > current_rank:
+            update_available = True
+        elif (
+            latest_rank == current_rank
+            and (is_daily or channel.lower() == "series")
+            and cycle != "stable"
+        ):
+            same_hash = bool(current_hash and latest_hash) and (
+                current_hash.startswith(latest_hash) or latest_hash.startswith(current_hash)
+            )
+            if not same_hash:
+                if current_commit_timestamp <= 0:
+                    raise ReleaseProviderError(
+                        "Could not determine the installed build's commit time"
+                    )
+                try:
+                    latest_commit_timestamp = fetch_commit_timestamp(latest_hash)
+                except ReleaseProviderError as exc:
+                    raise ReleaseProviderError(
+                        f"Could not verify whether the listed build is newer: {exc}"
+                    ) from exc
+                update_available = latest_commit_timestamp > current_commit_timestamp
 
     version_text = ".".join(map(str, latest_version))
-    cycle = str(selected.get("release_cycle", ""))
-    if is_daily and cycle:
+    if cycle != "stable":
         display_version = f"{version_text} {cycle} ({latest_hash[:12]})"
         download_url = DAILY_DOWNLOAD_URL
     else:

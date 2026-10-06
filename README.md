@@ -69,8 +69,19 @@ Automatic checks are disabled by default.
 | Channel | Checks for |
 | --- | --- |
 | Latest Stable Release | The newest public Blender release available for your platform and architecture |
-| Current Release Series | Corrective releases in the currently installed major/minor series |
-| Daily Builds | The newest official development build, including newer builds of the same version |
+| Current Release Series | Updates within the installed major/minor series; includes newer alpha, beta, and RC builds while running a prerelease |
+| Daily Builds | The newest development series, including alpha builds of the next Blender version |
+
+For example, on **5.3.0 beta**, Current Release Series follows newer 5.3 beta/RC
+builds and the final 5.3 release. After installing a stable release it follows
+stable corrective releases in that series. Daily Builds can instead offer
+**5.4.0 alpha**.
+
+Development builds are compared by commit hash and, when the version and release
+stage are unchanged, commit time. An unchanged hash or an older commit is not an
+update, even if an archive was uploaded more recently. If commit information
+cannot be verified, the check reports an error instead of claiming a build is
+newer or up to date.
 
 If the selected channel changes while a check is running, the old result is
 discarded and the newly selected channel is checked instead.
@@ -100,7 +111,9 @@ package once on Linux and installs that exact artifact on each tested platform.
 
 ## Network and privacy
 
-The extension makes a bounded HTTPS request to Blender's official build listing.
+The extension makes bounded HTTPS requests to Blender's official build listing,
+using its download table if the JSON service fails. Same-version development
+checks also read the listed commit's time from Blender's public source service.
 It validates returned download hosts, does not collect telemetry, and does not
 send project files or personal data anywhere.
 

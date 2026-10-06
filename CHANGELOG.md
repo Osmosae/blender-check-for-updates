@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0
+
+- Fall back to Blender's official download table when its JSON feed is broken.
+- Ignore checksum files when selecting a downloadable build.
+- Follow newer alpha, beta, and RC builds within Current Release Series when
+  running a prerelease, without jumping to the next development series.
+- Compare commit identity and commit time for same-version development builds
+  and recognize beta/RC-to-final updates without a version-number change.
+- Keep Daily Builds following the newest development series and clarify this
+  behavior in preferences.
+
 ## 1.1.0
 
 - Keep the delayed automatic-check timer alive while Blender loads its startup
