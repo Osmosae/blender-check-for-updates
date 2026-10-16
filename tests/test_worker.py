@@ -7,12 +7,32 @@ import unittest
 from unittest.mock import Mock, patch
 
 import worker
+import worker_protocol
 
 
 class WorkerTests(unittest.TestCase):
     def test_prerelease_identity_reaches_provider(self) -> None:
         provider = Mock()
-        provider.check_for_updates.return_value = {"ok": True, "update_available": True}
+        provider.check_for_updates.return_value = {
+            "ok": True,
+            "update_available": True,
+            "current_version": "5.3.0",
+            "latest_version": "5.3.0",
+            "display_version": "5.3.0 beta (abcdef123456)",
+            "latest_hash": "abcdef123456",
+            "release_cycle": "beta",
+            "channel": "series",
+            "download_url": "https://builder.blender.org/download/daily/",
+            "direct_download_url": "https://cdn.builder.blender.org/build.zip",
+            "file_mtime": 1792026901,
+        }
+        def load_sibling(module_name: str, filename: str):
+            if filename == "worker_protocol.py":
+                return worker_protocol
+            if filename == "release_provider.py":
+                return provider
+            raise AssertionError(f"Unexpected worker sibling: {filename}")
+
         output = io.StringIO()
         arguments = [
             "worker.py",
@@ -24,7 +44,7 @@ class WorkerTests(unittest.TestCase):
         ]
         with (
             patch.object(worker.sys, "argv", arguments),
-            patch.object(worker, "_load_provider", return_value=provider),
+            patch.object(worker, "_load_sibling", side_effect=load_sibling),
             contextlib.redirect_stdout(output),
         ):
             self.assertEqual(worker.main(), 0)

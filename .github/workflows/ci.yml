@@ -37,7 +37,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile sources
-        run: python -m py_compile __init__.py release_provider.py worker.py
+        run: python -m py_compile __init__.py release_provider.py worker.py worker_process.py worker_protocol.py
       - name: Run unit tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
@@ -57,30 +57,7 @@ jobs:
           path: ${{ runner.temp }}/blender-cache
           key: blender-${{ runner.os }}-${{ env.BLENDER_VERSION }}
       - name: Download and verify Blender
-        shell: bash
-        run: |
-          echo "BLENDER_USER_CONFIG=$RUNNER_TEMP/blender-config" >> "$GITHUB_ENV"
-          echo "BLENDER_USER_EXTENSIONS=$RUNNER_TEMP/blender-extensions" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/blender-cache" \
-            "$RUNNER_TEMP/blender-config" \
-            "$RUNNER_TEMP/blender-extensions"
-          archive="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
-          release_series="${BLENDER_VERSION%.*}"
-          base_url="https://download.blender.org/release/Blender${release_series}"
-          if [[ ! -f "$RUNNER_TEMP/blender-cache/$archive" ]]; then
-            curl --fail --location --retry 3 \
-              "$base_url/$archive" \
-              --output "$RUNNER_TEMP/blender-cache/$archive"
-          fi
-          curl --fail --location "$base_url/blender-${BLENDER_VERSION}.sha256" \
-            --output "$RUNNER_TEMP/blender-cache/checksums.sha256"
-          grep " $archive$" "$RUNNER_TEMP/blender-cache/checksums.sha256" \
-            > "$RUNNER_TEMP/blender-cache/archive.sha256"
-          cd "$RUNNER_TEMP/blender-cache"
-          sha256sum --check archive.sha256
-          tar -xf "$archive" -C "$RUNNER_TEMP"
-          echo "BLENDER_BIN=$RUNNER_TEMP/blender-${BLENDER_VERSION}-linux-x64/blender" \
-            >> "$GITHUB_ENV"
+        run: python .github/scripts/setup_blender.py
       - name: Validate source manifest
         run: xvfb-run -a "$BLENDER_BIN" --command extension validate
       - name: Run Blender registration smoke test
@@ -134,6 +111,9 @@ jobs:
       BLENDER_VERSION: ${{ matrix.blender-version }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
       - name: Cache Blender archive
         uses: actions/cache@v6
         with:
@@ -147,97 +127,13 @@ jobs:
       - name: Prepare isolated Blender profile and locate package
         shell: pwsh
         run: |
-          $configPath = Join-Path $env:RUNNER_TEMP "blender-config"
-          $extensionsPath = Join-Path $env:RUNNER_TEMP "blender-extensions"
-          New-Item -ItemType Directory -Force -Path $configPath, $extensionsPath | Out-Null
-          "BLENDER_USER_CONFIG=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "BLENDER_USER_EXTENSIONS=$extensionsPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
           $packages = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP "package") -Filter "*.zip")
           if ($packages.Count -ne 1) {
             throw "Expected exactly one downloaded package, found $($packages.Count)"
           }
           "PACKAGE_PATH=$($packages[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Download and verify Blender (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          cache_dir="$RUNNER_TEMP/blender-cache"
-          archive="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
-          release_series="${BLENDER_VERSION%.*}"
-          base_url="https://download.blender.org/release/Blender${release_series}"
-          mkdir -p "$cache_dir"
-          if [[ ! -f "$cache_dir/$archive" ]]; then
-            curl --fail --location --retry 3 \
-              "$base_url/$archive" \
-              --output "$cache_dir/$archive"
-          fi
-          curl --fail --location "$base_url/blender-${BLENDER_VERSION}.sha256" \
-            --output "$cache_dir/checksums.sha256"
-          grep " $archive$" "$cache_dir/checksums.sha256" \
-            > "$cache_dir/archive.sha256"
-          (cd "$cache_dir" && sha256sum --check archive.sha256)
-
-          tar -xf "$cache_dir/$archive" -C "$RUNNER_TEMP"
-          blender_bin="$RUNNER_TEMP/blender-${BLENDER_VERSION}-linux-x64/blender"
-          [[ -x "$blender_bin" ]]
-          echo "BLENDER_BIN=$blender_bin" >> "$GITHUB_ENV"
-      - name: Download and verify Blender (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          cache_dir="$RUNNER_TEMP/blender-cache"
-          archive="blender-${BLENDER_VERSION}-macos-arm64.dmg"
-          release_series="${BLENDER_VERSION%.*}"
-          base_url="https://download.blender.org/release/Blender${release_series}"
-          mkdir -p "$cache_dir"
-          if [[ ! -f "$cache_dir/$archive" ]]; then
-            curl --fail --location --retry 3 \
-              "$base_url/$archive" \
-              --output "$cache_dir/$archive"
-          fi
-          curl --fail --location "$base_url/blender-${BLENDER_VERSION}.sha256" \
-            --output "$cache_dir/checksums.sha256"
-          grep " $archive$" "$cache_dir/checksums.sha256" \
-            > "$cache_dir/archive.sha256"
-          (cd "$cache_dir" && shasum -a 256 --check archive.sha256)
-
-          mount_point="$RUNNER_TEMP/blender-mount"
-          mkdir -p "$mount_point"
-          hdiutil attach "$cache_dir/$archive" -nobrowse -readonly -mountpoint "$mount_point"
-          blender_bin="$mount_point/Blender.app/Contents/MacOS/Blender"
-          [[ -x "$blender_bin" ]]
-          echo "BLENDER_BIN=$blender_bin" >> "$GITHUB_ENV"
-      - name: Download and verify Blender (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $cacheDir = Join-Path $env:RUNNER_TEMP "blender-cache"
-          $archive = "blender-$env:BLENDER_VERSION-windows-x64.zip"
-          $archivePath = Join-Path $cacheDir $archive
-          $releaseSeries = $env:BLENDER_VERSION -replace "\.\d+$", ""
-          $baseUrl = "https://download.blender.org/release/Blender$releaseSeries"
-          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
-          if (-not (Test-Path -LiteralPath $archivePath)) {
-            curl.exe --fail --location --retry 3 "$baseUrl/$archive" --output $archivePath
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-
-          $checksumsPath = Join-Path $cacheDir "checksums.sha256"
-          curl.exe --fail --location "$baseUrl/blender-$env:BLENDER_VERSION.sha256" --output $checksumsPath
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $checksumLine = Get-Content -LiteralPath $checksumsPath |
-            Where-Object { $_.EndsWith(" $archive") -or $_.EndsWith("*$archive") } |
-            Select-Object -First 1
-          if (-not $checksumLine) { throw "Checksum not found for $archive" }
-          $expectedHash = ($checksumLine -split "\s+")[0].ToLowerInvariant()
-          $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualHash -ne $expectedHash) { throw "SHA-256 mismatch for $archive" }
-
-          Expand-Archive -LiteralPath $archivePath -DestinationPath $env:RUNNER_TEMP -Force
-          $blenderBin = Join-Path $env:RUNNER_TEMP "blender-$env:BLENDER_VERSION-windows-x64\blender.exe"
-          if (-not (Test-Path -LiteralPath $blenderBin)) { throw "Blender executable not found" }
-          "BLENDER_BIN=$blenderBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Download and verify Blender
+        run: python .github/scripts/setup_blender.py
       - name: Validate and install package (Linux)
         if: runner.os == 'Linux'
         shell: bash

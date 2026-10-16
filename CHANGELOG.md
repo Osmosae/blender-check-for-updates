@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+- Reject malformed or inconsistent build-feed records before selecting an update.
+- Validate requests and results exchanged with the background checker, and
+  centralize its process lifecycle.
+- Keep package verification aligned with the extension manifest and simplify
+  Blender setup across CI platforms.
+
 ## 1.2.0
 
 - Fall back to Blender's official download table when its JSON feed is broken.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as _datetime
-import json
 from pathlib import Path
 import random
 import subprocess
@@ -14,10 +13,10 @@ from typing import Any
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 
+from .worker_process import WorkerProcess
 
-_PROCESS: subprocess.Popen[str] | None = None
-_PROCESS_SOURCE = ""
-_PROCESS_CHANNEL = ""
+
+_WORKER = WorkerProcess()
 _POLL_SECONDS = 0.35
 _AUTO_START_DELAY_MIN = 45.0
 _AUTO_START_DELAY_MAX = 90.0
@@ -97,9 +96,7 @@ def _worker_command(preferences) -> list[str]:
 
 
 def _start_worker(preferences, *, source: str) -> bool:
-    global _PROCESS, _PROCESS_CHANNEL, _PROCESS_SOURCE
-
-    if _PROCESS is not None:
+    if _WORKER.active:
         return False
     if not bpy.app.online_access:
         return False
@@ -110,14 +107,10 @@ def _start_worker(preferences, *, source: str) -> bool:
 
     requested_channel = preferences.update_channel
     try:
-        _PROCESS = subprocess.Popen(
+        _WORKER.start(
             _worker_command(preferences),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            source=source,
+            channel=requested_channel,
             creationflags=creation_flags,
         )
     except OSError as exc:
@@ -125,14 +118,9 @@ def _start_worker(preferences, *, source: str) -> bool:
         preferences.last_message = f"Could not start the update checker: {exc}"
         _set_last_checked_at(preferences, time.time())
         preferences.last_channel = preferences.update_channel
-        _PROCESS = None
-        _PROCESS_SOURCE = ""
-        _PROCESS_CHANNEL = ""
         _tag_redraw()
         return False
 
-    _PROCESS_SOURCE = source
-    _PROCESS_CHANNEL = requested_channel
     preferences.last_status = "CHECKING"
     preferences.last_message = "Checking Blender's official build service…"
     _tag_redraw()
@@ -142,28 +130,10 @@ def _start_worker(preferences, *, source: str) -> bool:
 def _poll_worker() -> tuple[bool, dict[str, Any] | None, str]:
     """Poll and return ``(completed, result, requested_channel)``."""
 
-    global _PROCESS, _PROCESS_CHANNEL, _PROCESS_SOURCE
-
-    process = _PROCESS
-    if process is None:
-        return True, None, ""
-    if process.poll() is None:
-        return False, None, _PROCESS_CHANNEL
-
-    requested_channel = _PROCESS_CHANNEL
-    stdout, stderr = process.communicate()
-    _PROCESS = None
-    _PROCESS_SOURCE = ""
-    _PROCESS_CHANNEL = ""
-
-    try:
-        result = json.loads(stdout)
-        if not isinstance(result, dict):
-            raise ValueError("worker result was not an object")
-    except (json.JSONDecodeError, ValueError) as exc:
-        detail = stderr.strip() or str(exc)
-        result = {"ok": False, "error": f"The update checker failed: {detail}"}
-    return True, result, requested_channel
+    completion = _WORKER.poll()
+    if completion is None:
+        return (False, None, "") if _WORKER.active else (True, None, "")
+    return True, completion.result, completion.requested_channel
 
 
 def _result_matches_channel(preferences, requested_channel: str) -> bool:
@@ -236,7 +206,7 @@ def _recover_stale_check(preferences) -> bool:
 
     if (
         preferences is None
-        or _PROCESS is not None
+        or _WORKER.active
         or preferences.last_status != "CHECKING"
     ):
         return False
@@ -276,20 +246,7 @@ def _apply_result(preferences, result: dict[str, Any] | None) -> tuple[str, str]
 
 
 def _terminate_worker() -> None:
-    global _PROCESS, _PROCESS_CHANNEL, _PROCESS_SOURCE
-
-    process = _PROCESS
-    _PROCESS = None
-    _PROCESS_SOURCE = ""
-    _PROCESS_CHANNEL = ""
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=0.5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+    _WORKER.terminate()
 
 
 def _seconds_until_auto_check(preferences) -> float:
@@ -328,7 +285,7 @@ def _automatic_check_timer() -> float | None:
     if preferences is None:
         return None
 
-    if _PROCESS is not None and _PROCESS_SOURCE == "auto":
+    if _WORKER.active and _WORKER.source == "auto":
         completed, result, requested_channel = _poll_worker()
         if not completed:
             return _POLL_SECONDS
@@ -353,7 +310,7 @@ def _automatic_check_timer() -> float | None:
 
     if not preferences.auto_check:
         return None
-    if _PROCESS is not None:
+    if _WORKER.active:
         return _POLL_SECONDS
 
     is_launch_schedule = preferences.check_interval == "LAUNCH"
@@ -380,7 +337,7 @@ def _automatic_check_timer() -> float | None:
 
 def _manual_background_timer() -> float | None:
     preferences = _preferences()
-    if preferences is None or _PROCESS_SOURCE != "manual_background":
+    if preferences is None or _WORKER.source != "manual_background":
         return None
     completed, result, requested_channel = _poll_worker()
     if not completed:
@@ -397,10 +354,10 @@ def _schedule_automatic_check(*, restart: bool = False) -> None:
     preferences = _preferences()
     is_registered = bpy.app.timers.is_registered(_automatic_check_timer)
     if preferences is None or not preferences.auto_check:
-        if is_registered and _PROCESS_SOURCE != "auto":
+        if is_registered and _WORKER.source != "auto":
             bpy.app.timers.unregister(_automatic_check_timer)
         return
-    if restart and is_registered and _PROCESS_SOURCE != "auto":
+    if restart and is_registered and _WORKER.source != "auto":
         bpy.app.timers.unregister(_automatic_check_timer)
         is_registered = False
     if not is_registered:
@@ -477,7 +434,7 @@ class WM_OT_check_for_blender_updates(bpy.types.Operator):
                 "Online access is disabled in Blender's System preferences",
             )
             return False
-        if _PROCESS is not None:
+        if _WORKER.active:
             self.report({"INFO"}, "An update check is already running")
             return False
         if not _start_worker(preferences, source=source):

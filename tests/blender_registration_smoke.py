@@ -78,16 +78,22 @@ class CompletedProcess:
         return self.stdout, ""
 
 
-module._PROCESS = CompletedProcess()
-module._PROCESS_SOURCE = "auto"
-module._PROCESS_CHANNEL = "DAILY"
+def completed_worker(stdout, *, source, channel):
+    worker = module.WorkerProcess()
+    worker._process = CompletedProcess(stdout)
+    worker._source = source
+    worker._channel = channel
+    module._WORKER = worker
+    return worker
+
+
+worker = completed_worker('{"ok":false,"error":"test"}', source="auto", channel="DAILY")
 completed, result, requested_channel = module._poll_worker()
 assert completed
 assert result == {"ok": False, "error": "test"}
 assert requested_channel == "DAILY"
-assert module._PROCESS is None
-assert module._PROCESS_SOURCE == ""
-assert module._PROCESS_CHANNEL == ""
+assert not worker.active
+assert worker.source == ""
 
 
 class StubbornProcess:
@@ -113,16 +119,17 @@ class StubbornProcess:
 
 
 stubborn_process = StubbornProcess()
-module._PROCESS = stubborn_process
-module._PROCESS_SOURCE = "auto"
-module._PROCESS_CHANNEL = "STABLE"
+stubborn_worker = module.WorkerProcess()
+stubborn_worker._process = stubborn_process
+stubborn_worker._source = "auto"
+stubborn_worker._channel = "STABLE"
+module._WORKER = stubborn_worker
 module._terminate_worker()
 assert stubborn_process.terminated
 assert stubborn_process.killed
 assert stubborn_process.reaped
-assert module._PROCESS is None
-assert module._PROCESS_SOURCE == ""
-assert module._PROCESS_CHANNEL == ""
+assert not stubborn_worker.active
+assert stubborn_worker.source == ""
 
 result_preferences = SimpleNamespace(
     update_channel="STABLE",
@@ -172,23 +179,17 @@ timer_preferences = SimpleNamespace(
 original_preferences = module._preferences
 module._preferences = lambda _context=None: timer_preferences
 
-module._PROCESS = CompletedProcess()
-module._PROCESS_SOURCE = "auto"
-module._PROCESS_CHANNEL = "STABLE"
+completed_worker('{"ok":false,"error":"test"}', source="auto", channel="STABLE")
 assert module._automatic_check_timer() == module._POLL_SECONDS
 assert timer_preferences.last_status == "NEVER"
 
-module._PROCESS = CompletedProcess()
-module._PROCESS_SOURCE = "auto"
-module._PROCESS_CHANNEL = "DAILY"
+completed_worker('{"ok":false,"error":"temporary failure"}', source="auto", channel="DAILY")
 module._AUTO_FAILURE_COUNT = 0
 assert module._automatic_check_timer() == 15 * 60
 assert module._AUTO_FAILURE_COUNT == 1
 assert timer_preferences.last_status == "ERROR"
 
-module._PROCESS = CompletedProcess()
-module._PROCESS_SOURCE = "auto"
-module._PROCESS_CHANNEL = "DAILY"
+completed_worker('{"ok":false,"error":"temporary failure"}', source="auto", channel="DAILY")
 assert module._automatic_check_timer() == 30 * 60
 assert module._AUTO_FAILURE_COUNT == 2
 

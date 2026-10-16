@@ -99,9 +99,12 @@ extension preferences.
 
 ## Platform support
 
-The release is a single platform-independent ZIP containing only Python source
-and documentation; it does not require bundled Python wheels. CI builds the
-package once on Linux and installs that exact artifact on each tested platform.
+The release is a single platform-independent ZIP containing the extension's
+Python modules, manifest, README, changelog, and license; it does not require
+bundled Python wheels. Repository-only material, including `tests/`, `.github/`,
+and the screenshot files under `docs/images/`, is excluded from the ZIP. CI
+builds the package once on Linux and installs that exact artifact on each tested
+platform.
 
 | Platform | Blender coverage |
 | --- | --- |

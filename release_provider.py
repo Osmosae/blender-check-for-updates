@@ -16,13 +16,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 
 BUILDS_API_URL = "https://builder.blender.org/download/daily/?format=json&v=2"
 STABLE_DOWNLOAD_URL = "https://www.blender.org/download/"
 DAILY_DOWNLOAD_URL = "https://builder.blender.org/download/daily/"
-USER_AGENT = "Release-Watcher/1.2.0"
+USER_AGENT = "Release-Watcher/1.3.0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 8.0
 COMMIT_API_URL = "https://projects.blender.org/api/v1/repos/blender/blender/git/commits/"
@@ -43,6 +44,47 @@ _BUILD_FILENAME_PATTERN = re.compile(
 
 class ReleaseProviderError(RuntimeError):
     """An expected lookup, validation, or network failure."""
+
+
+@dataclass(frozen=True)
+class Build(Mapping[str, Any]):
+    """A normalized, immutable build accepted from an official listing.
+
+    The mapping interface keeps the parsed result convenient for older callers,
+    while provider internals use the validated attributes directly.
+    """
+
+    version_tuple: tuple[int, int, int]
+    release_cycle: str
+    platform: str
+    architecture: str
+    file_extension: str
+    hash: str
+    url: str
+    file_mtime: int
+    file_name: str
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "version":
+            return ".".join(map(str, self.version_tuple))
+        if key == "version_tuple":
+            return self.version_tuple
+        if key in {
+            "release_cycle", "platform", "architecture", "file_extension",
+            "hash", "url", "file_mtime", "file_name",
+        }:
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter((
+            "version", "version_tuple", "release_cycle", "platform",
+            "architecture", "file_extension", "hash", "url", "file_mtime",
+            "file_name",
+        ))
+
+    def __len__(self) -> int:
+        return 10
 
 
 def parse_version(value: str | Iterable[int]) -> tuple[int, int, int]:
@@ -201,7 +243,7 @@ class _BuildListingParser(HTMLParser):
             self._row = None
 
 
-def parse_builds_html(payload: str) -> list[dict[str, Any]]:
+def parse_builds_html(payload: str) -> list[Build]:
     parser = _BuildListingParser()
     parser.feed(payload)
     parser.close()
@@ -212,7 +254,7 @@ def fetch_builds(
     *,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     opener: Callable[..., Any] = urllib.request.urlopen,
-) -> list[dict[str, Any]]:
+) -> list[Build]:
     """Use the download table when the JSON service is unavailable or broken."""
 
     try:
@@ -251,7 +293,7 @@ def fetch_commit_timestamp(build_hash: str) -> int:
         raise ReleaseProviderError("Blender's commit information was not valid") from exc
 
 
-def parse_builds(payload: str) -> list[dict[str, Any]]:
+def parse_builds(payload: str) -> list[Build]:
     """Parse and minimally validate build records from the official feed."""
 
     try:
@@ -263,8 +305,8 @@ def parse_builds(payload: str) -> list[dict[str, Any]]:
     return _validate_builds(raw_builds)
 
 
-def _validate_builds(raw_builds: Iterable[Any]) -> list[dict[str, Any]]:
-    builds: list[dict[str, Any]] = []
+def _validate_builds(raw_builds: Iterable[Any]) -> list[Build]:
+    builds: list[Build] = []
     for raw in raw_builds:
         if not isinstance(raw, Mapping) or raw.get("app") != "Blender":
             continue
@@ -280,18 +322,45 @@ def _validate_builds(raw_builds: Iterable[Any]) -> list[dict[str, Any]]:
             file_mtime = int(raw["file_mtime"])
             if file_mtime < 0:
                 continue
-            build = dict(raw)
             cycle = str(raw.get("release_cycle", "")).lower()
-            build["release_cycle"] = "rc" if cycle == "candidate" else cycle
+            cycle = "rc" if cycle == "candidate" else cycle
+            build_platform = str(raw["platform"]).lower()
+            architecture = str(raw["architecture"]).lower()
+            extension = str(raw["file_extension"]).lower()
+            build_hash = str(raw["hash"]).strip().lower()
+            filename = urllib.parse.unquote(parsed_url.path.rsplit("/", 1)[-1]).lower()
+            expected_suffixes = {
+                "zip": (".zip",),
+                "msi": (".msi",),
+                "msix": (".msix",),
+                "dmg": (".dmg",),
+                "xz": (".tar.xz", ".xz"),
+            }
+            declared_filename = str(raw.get("file_name", ""))
             if (
-                build["release_cycle"] not in _CYCLE_RANK
-                or build.get("file_extension") not in _PACKAGE_EXTENSIONS
+                cycle not in _CYCLE_RANK
+                or build_platform not in {"windows", "darwin", "linux"}
+                or architecture not in {"amd64", "x86_64", "arm64"}
+                or (build_platform == "windows" and architecture == "x86_64")
+                or (build_platform != "windows" and architecture == "amd64")
+                or extension not in _PACKAGE_EXTENSIONS
+                or not re.fullmatch(r"[0-9a-f]{7,40}", build_hash)
+                or not filename.endswith(expected_suffixes.get(extension, ()))
+                or (declared_filename and declared_filename.lower() != filename)
                 or parsed_url.path.endswith((".sha256", ".sha512", ".md5"))
             ):
                 continue
-            build["version_tuple"] = version
-            build["file_mtime"] = file_mtime
-            builds.append(build)
+            builds.append(Build(
+                version_tuple=version,
+                release_cycle=cycle,
+                platform=build_platform,
+                architecture=architecture,
+                file_extension=extension,
+                hash=build_hash,
+                url=url,
+                file_mtime=file_mtime,
+                file_name=declared_filename or filename,
+            ))
         except (KeyError, TypeError, ValueError, ReleaseProviderError):
             continue
 
@@ -301,31 +370,31 @@ def _validate_builds(raw_builds: Iterable[Any]) -> list[dict[str, Any]]:
 
 
 def _select_package(
-    builds: Iterable[Mapping[str, Any]],
+    builds: Iterable[Build],
     *,
     build_platform: str,
     architecture: str,
     package_format: str,
-) -> Mapping[str, Any] | None:
+) -> Build | None:
     matching_platform = [
         build
         for build in builds
-        if build.get("platform") == build_platform
-        and build.get("architecture") == architecture
+        if build.platform == build_platform
+        and build.architecture == architecture
     ]
     if not matching_platform:
         return None
 
     extension = preferred_extension(build_platform, package_format)
     matching_format = [
-        build for build in matching_platform if build.get("file_extension") == extension
+        build for build in matching_platform if build.file_extension == extension
     ]
     choices = matching_format or matching_platform
-    return max(choices, key=lambda build: int(build.get("file_mtime", 0)))
+    return max(choices, key=lambda build: build.file_mtime)
 
 
 def select_build(
-    builds: Iterable[Mapping[str, Any]],
+    builds: Iterable[Build],
     *,
     current_version: tuple[int, int, int],
     current_cycle: str = "release",
@@ -333,7 +402,7 @@ def select_build(
     build_platform: str,
     architecture: str,
     package_format: str = "auto",
-) -> Mapping[str, Any]:
+) -> Build:
     """Select the relevant release for the configured channel and machine."""
 
     channel = channel.lower()
@@ -345,17 +414,17 @@ def select_build(
         candidates = [
             build
             for build in all_builds
-            if follow_prereleases or build.get("release_cycle") == "stable"
+            if follow_prereleases or build.release_cycle == "stable"
         ]
         if channel == "series":
             candidates = [
                 build
                 for build in candidates
-                if tuple(build["version_tuple"][:2]) == current_version[:2]
+                if build.version_tuple[:2] == current_version[:2]
             ]
     elif channel == "daily":
         candidates = [
-            build for build in all_builds if build.get("release_cycle") != "stable"
+            build for build in all_builds if build.release_cycle != "stable"
         ]
     else:
         raise ReleaseProviderError(f"Unknown update channel: {channel}")
@@ -367,8 +436,8 @@ def select_build(
     compatible_candidates = [
         build
         for build in candidates
-        if build.get("platform") == build_platform
-        and build.get("architecture") == architecture
+        if build.platform == build_platform
+        and build.architecture == architecture
     ]
     if not compatible_candidates:
         label = "current release series" if channel == "series" else channel
@@ -377,18 +446,18 @@ def select_build(
         )
 
     newest_version = max(
-        tuple(build["version_tuple"]) for build in compatible_candidates
+        build.version_tuple for build in compatible_candidates
     )
     newest = [
         build
         for build in compatible_candidates
-        if tuple(build["version_tuple"]) == newest_version
+        if build.version_tuple == newest_version
     ]
-    newest_cycle = max(_CYCLE_RANK[str(build["release_cycle"])] for build in newest)
+    newest_cycle = max(_CYCLE_RANK[build.release_cycle] for build in newest)
     newest = [
         build
         for build in newest
-        if _CYCLE_RANK[str(build["release_cycle"])] == newest_cycle
+        if _CYCLE_RANK[build.release_cycle] == newest_cycle
     ]
     selected = _select_package(
         newest,
@@ -431,11 +500,11 @@ def check_for_updates(
         package_format=package_format,
     )
 
-    latest_version = tuple(selected["version_tuple"])
-    latest_hash = str(selected.get("hash", "")).strip().lower()
+    latest_version = selected.version_tuple
+    latest_hash = selected.hash
     current_hash = current_hash.strip().lower()
     is_daily = channel.lower() == "daily"
-    cycle = str(selected.get("release_cycle", ""))
+    cycle = selected.release_cycle
     current_cycle = "stable" if current_cycle == "release" else current_cycle
     update_available = latest_version > current_version
     if latest_version == current_version:
@@ -482,6 +551,6 @@ def check_for_updates(
         "release_cycle": cycle,
         "channel": channel.lower(),
         "download_url": download_url,
-        "direct_download_url": str(selected["url"]),
-        "file_mtime": int(selected["file_mtime"]),
+        "direct_download_url": selected.url,
+        "file_mtime": selected.file_mtime,
     }
