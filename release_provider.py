@@ -346,7 +346,6 @@ def _validate_builds(raw_builds: Iterable[Any]) -> list[Build]:
                 or extension not in _PACKAGE_EXTENSIONS
                 or not re.fullmatch(r"[0-9a-f]{7,40}", build_hash)
                 or not filename.endswith(expected_suffixes.get(extension, ()))
-                or (declared_filename and declared_filename.lower() != filename)
                 or parsed_url.path.endswith((".sha256", ".sha512", ".md5"))
             ):
                 continue
